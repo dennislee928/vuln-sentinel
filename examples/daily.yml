@@ -28,6 +28,8 @@ jobs:
         with:
           token: ${{ secrets.SENTINEL_TOKEN }}
           mode: run
+          auto-merge: "false"
+          merge-without-checks: "false"
           dry-run: ${{ inputs.dry-run || 'false' }}
           nvd-api-key: ${{ secrets.NVD_API_KEY }}
           vulners-api-key: ${{ secrets.VULNERS_API_KEY }}

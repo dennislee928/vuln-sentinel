@@ -9,8 +9,12 @@ inputs:
   token:
     description: >
       Token used to read repositories and open issues/PRs across your account and orgs.
-      A classic PAT with `repo`, `workflow` and `read:org` scopes (GITHUB_TOKEN only reaches the current repository).
+      A classic PAT with `repo`, `workflow` and `read:org` scopes, or a GitHub App
+      installation token with auth-mode: app (GITHUB_TOKEN only reaches the current repository).
     required: true
+  auth-mode:
+    description: "Token type: pat | app (GitHub App installation token)"
+    default: pat
   mode:
     description: "Pipeline step: run | collect | scan | ticket | fix | verify | archive"
     default: run
@@ -31,7 +35,7 @@ inputs:
     default: "false"
   auto-merge:
     description: Merge fix PRs automatically once CI is green
-    default: "true"
+    default: "false"
   merge-without-checks:
     description: Also merge fix PRs in repositories that have no CI at all
     default: "false"
@@ -148,6 +152,7 @@ runs:
       shell: bash
       env:
         VS_TOKEN: ${{ inputs.token }}
+        VS_AUTH_MODE: ${{ inputs.auth-mode }}
         NVD_API_KEY: ${{ inputs.nvd-api-key }}
         VULNERS_API_KEY: ${{ inputs.vulners-api-key }}
         ATTACKERKB_API_KEY: ${{ inputs.attackerkb-api-key }}

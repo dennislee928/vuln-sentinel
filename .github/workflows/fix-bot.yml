@@ -37,7 +37,9 @@ jobs:
         uses: ./
         with:
           token: ${{ steps.bot.outputs.token }}
+          auth-mode: app
           mode: scan
           dry-run: "true"
           auto-merge: "false"
+          merge-without-checks: "false"
           commit-results: "false"

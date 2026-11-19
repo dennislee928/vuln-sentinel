@@ -1,4 +1,4 @@
-# Every 4 hours: merge green fix PRs, re-check unresolved findings, close
+# Every 4 hours: re-check unresolved findings, close
 # resolved tickets, and archive days whose findings are all resolved.
 name: vuln-sentinel verify
 on:
@@ -24,11 +24,17 @@ jobs:
         with:
           token: ${{ secrets.SENTINEL_TOKEN }}
           mode: verify
+          auto-merge: "false"
+          merge-without-checks: "false"
       - uses: dennislee928/vuln-sentinel@v1
         with:
           token: ${{ secrets.SENTINEL_TOKEN }}
           mode: fix
+          auto-merge: "false"
+          merge-without-checks: "false"
       - uses: dennislee928/vuln-sentinel@v1
         with:
           token: ${{ secrets.SENTINEL_TOKEN }}
           mode: archive
+          auto-merge: "false"
+          merge-without-checks: "false"

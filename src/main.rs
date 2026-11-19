@@ -92,7 +92,7 @@ pub struct Opts {
     #[arg(long, default_value_t = 150, global = true)]
     max_new_issues: usize,
     /// Merge fix PRs automatically once CI passes.
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set, global = true)]
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set, global = true)]
     auto_merge: bool,
     /// Also merge fix PRs in repositories that have no CI at all.
     #[arg(long, global = true)]
@@ -400,4 +400,18 @@ async fn main() -> Result<()> {
         Cmd::Run => app.run().await?,
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn auto_merge_requires_explicit_opt_in() {
+        for mode in ["run", "fix", "verify"] {
+            assert!(!Cli::try_parse_from(["vuln-sentinel", mode]).unwrap().opts.auto_merge);
+            assert!(!Cli::try_parse_from(["vuln-sentinel", mode, "--merge-without-checks"]).unwrap().opts.auto_merge);
+            assert!(Cli::try_parse_from(["vuln-sentinel", mode, "--auto-merge", "true"]).unwrap().opts.auto_merge);
+        }
+    }
 }

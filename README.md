@@ -5,7 +5,7 @@ A GitHub Action, written in Rust, that runs every day and:
 1. **Collects** the newest advisories from CVE (NVD), OSV, ENISA EUVD, the GitHub Advisory Database, OpenSSF Malicious Packages, Vulners, Sploitus and AttackerKB. Each advisory is mapped to the OWASP Top 10 through its CWE. The results go into `reports/{date}.md`.
 2. **Scans** every repository you own or reach through your organizations: lockfiles on the default branch are matched against the full OSV database, and hits that come from that day's advisories are highlighted.
 3. **Opens tickets**: one issue per vulnerable package in the affected repo, plus a daily tracker issue in your ops repo.
-4. **Fixes**: upgrades each package to the minimal fixed version with the ecosystem's own tool and opens one PR per repo. The PR merges automatically once CI is green.
+4. **Fixes**: upgrades each package to the minimal fixed version with the ecosystem's own tool and opens one PR per repo for manual review and merge.
 5. **Verifies** again until every finding from that day is resolved, then **archives** the report, the raw advisories and the resolution metrics into `archive/{date}/`.
 
 ## Quick start
@@ -28,9 +28,15 @@ Copy [`examples/daily.yml`](examples/daily.yml) and [`examples/verify.yml`](exam
   with:
     token: ${{ secrets.SENTINEL_TOKEN }}
     mode: run          # run | collect | scan | ticket | fix | verify | archive
+    auto-merge: "false"
+    merge-without-checks: "false"
 ```
 
 The workflow needs `permissions: contents: write, issues: write`. The action commits `reports/`, `state/` and `archive/` back to the ops repository.
+
+For a GitHub App installation token, set `auth-mode: app` in the action's `with` block. The default `auth-mode: pat` preserves PAT enumeration through `/user/repos`; App mode lists only repositories accessible to the installation token through `/installation/repositories`, including pagination of the `repositories` array. See [GitHub's installation API documentation](https://docs.github.com/en/rest/apps/installations#list-repositories-accessible-to-the-app-installation).
+
+For remediation, grant the installation **Contents: write**, **Pull requests: write**, and **Issues: write** on the target repositories. Installation access alone does not imply write access: `permissions.admin` is not used to authorize fixes. Explicit `permissions.push: false` skips remediation; when that field is absent, GitHub enforces token permissions during branch pushes and PR creation. A scan-only installation needs Contents read access. The bot does not change repository settings to enable auto-merge or bypass branch protections.
 
 ## Sources
 
@@ -66,9 +72,9 @@ A change is committed only after re-parsing the lockfile confirms the vulnerable
 
 ## Merge policy
 
-- If the default branch has **required status checks** (branch protection or rulesets), GitHub auto-merge is enabled on the fix PR.
-- Otherwise vuln-sentinel inspects the PR's check runs on every `verify` and merges once **all of them pass**.
-- Repositories with no CI are left for a manual merge, unless you set `merge-without-checks: true`.
+- Automatic merging defaults to **off** in both the Action and CLI. Production remediation workflows should explicitly set `auto-merge: "false"` and `merge-without-checks: "false"`.
+- With `auto-merge: false`, neither GitHub auto-merge enablement nor the direct merge API runs. Existing auto-merge is disabled on tracked open fix PRs during `verify`, and before updating an existing fix PR. Dry runs do not change GitHub settings or PRs.
+- If you explicitly opt into `auto-merge: true`, GitHub auto-merge is requested when required checks exist and repository settings already permit it. Otherwise `verify` merges after all checks pass. Repositories with no CI require manual merge unless `merge-without-checks: true` is also set.
 - If a fix PR is closed without merging, its findings go back to *open* and are retried. After `max-fix-attempts` tries the package is left to a human.
 
 ## Lifecycle
@@ -82,13 +88,14 @@ A day is archived once every finding first seen on it is resolved, meaning it no
 
 ## Inputs
 
-See [`action.yml`](action.yml). The main ones: `owners`, `repos`, `exclude`, `include-forks`, `include-archived`, `auto-merge`, `merge-without-checks`, `dry-run`, `window-hours`, `max-new-issues`, `max-fix-repos`, `max-fix-groups`, `max-iterations`, `poll-minutes`.
+See [`action.yml`](action.yml). The main ones: `auth-mode`, `owners`, `repos`, `exclude`, `include-forks`, `include-archived`, `auto-merge`, `merge-without-checks`, `dry-run`, `window-hours`, `max-new-issues`, `max-fix-repos`, `max-fix-groups`, `max-iterations`, `poll-minutes`.
 
 ## Local use
 
 ```bash
 cargo build --release
 VS_TOKEN=$(gh auth token) ./target/release/vuln-sentinel run --dry-run --limit 5
+# For an installation token, also set VS_AUTH_MODE=app (default: pat).
 ```
 
 ## License

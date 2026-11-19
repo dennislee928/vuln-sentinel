@@ -1,7 +1,6 @@
-//! Enumerate repositories owned by the authenticated user and the
-//! organizations they belong to.
+//! Enumerate repositories accessible to a PAT or GitHub App installation.
 use crate::github::GitHub;
-use anyhow::Result;
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,7 +11,9 @@ pub struct Repo {
     pub fork: bool,
     pub private: bool,
     pub has_issues: bool,
-    pub admin: bool,
+    /// PAT push permission, when supplied. Installation listings may omit it;
+    /// Git push and PR creation then enforce the token's actual permissions.
+    pub can_push: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -28,11 +29,13 @@ pub struct RepoFilter {
 }
 
 pub async fn list(gh: &GitHub, f: &RepoFilter) -> Result<Vec<Repo>> {
-    let raw = gh.paginate(
-    "/installation/repositories?per_page=100",
-    Some("repositories"),
-    100,
-).await?;
+    let mode = std::env::var("VS_AUTH_MODE").unwrap_or_else(|_| "pat".into());
+    list_with_mode(gh, f, &mode).await
+}
+
+async fn list_with_mode(gh: &GitHub, f: &RepoFilter, mode: &str) -> Result<Vec<Repo>> {
+    let (path, pick) = repository_endpoint(mode)?;
+    let raw = gh.paginate(path, pick, 100).await?;
     let mut repos: Vec<Repo> = raw
         .iter()
         .filter_map(|r| {
@@ -43,7 +46,7 @@ pub async fn list(gh: &GitHub, f: &RepoFilter) -> Result<Vec<Repo>> {
                 fork: r["fork"].as_bool().unwrap_or(false),
                 private: r["private"].as_bool().unwrap_or(true),
                 has_issues: r["has_issues"].as_bool().unwrap_or(true),
-                admin: r["permissions"]["admin"].as_bool().unwrap_or(false),
+                can_push: r["permissions"]["push"].as_bool(),
             })
         })
         .filter(|r| keep(r, f))
@@ -54,6 +57,14 @@ pub async fn list(gh: &GitHub, f: &RepoFilter) -> Result<Vec<Repo>> {
         repos.truncate(n);
     }
     Ok(repos)
+}
+
+fn repository_endpoint(mode: &str) -> Result<(&'static str, Option<&'static str>)> {
+    match mode {
+        "app" => Ok(("/installation/repositories?per_page=100", Some("repositories"))),
+        "pat" => Ok(("/user/repos?affiliation=owner,organization_member&per_page=100&sort=full_name", None)),
+        _ => bail!("invalid VS_AUTH_MODE {mode:?}; expected pat or app"),
+    }
 }
 
 fn keep(r: &Repo, f: &RepoFilter) -> bool {
@@ -68,9 +79,40 @@ fn keep(r: &Repo, f: &RepoFilter) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::github::tests::{json_response, mock};
+
+    #[tokio::test]
+    async fn app_envelope_pagination_and_pat_array() {
+        let first = r#"{"repositories":[{"full_name":"org/b"}]}"#;
+        let second = r#"{"repositories":[{"full_name":"org/a"}]}"#;
+        let (gh, finish) = mock(vec![
+            json_response(first, "Link: <{base}/installation/repositories?per_page=100&page=2>; rel=\"next\"\r\n"),
+            json_response(second, ""),
+            json_response(r#"[{"full_name":"user/a","permissions":{"admin":false,"push":true}}]"#, ""),
+        ]);
+        let repos = list_with_mode(&gh, &RepoFilter::default(), "app").await.unwrap();
+        assert_eq!(repos.iter().map(|r| r.full_name.as_str()).collect::<Vec<_>>(), ["org/a", "org/b"]);
+        assert_eq!(repos[0].can_push, None);
+        let repos = list_with_mode(&gh, &RepoFilter::default(), "pat").await.unwrap();
+        assert_eq!(repos[0].can_push, Some(true));
+        assert!(list_with_mode(&gh, &RepoFilter::default(), "invalid").await.is_err());
+        let requests = finish();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[0].starts_with("GET /installation/repositories?per_page=100 HTTP/1.1"));
+        assert!(requests[1].starts_with("GET /installation/repositories?per_page=100&page=2 HTTP/1.1"));
+        assert!(requests[2].starts_with("GET /user/repos?affiliation=owner,organization_member&per_page=100&sort=full_name HTTP/1.1"));
+    }
 
     fn repo(name: &str, archived: bool, fork: bool) -> Repo {
-        Repo { full_name: name.into(), default_branch: "main".into(), archived, fork, private: false, has_issues: true, admin: true }
+        Repo {
+            full_name: name.into(),
+            default_branch: "main".into(),
+            archived,
+            fork,
+            private: false,
+            has_issues: true,
+            can_push: Some(true),
+        }
     }
 
     #[test]

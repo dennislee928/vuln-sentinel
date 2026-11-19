@@ -11,11 +11,18 @@ const API: &str = "https://api.github.com";
 pub struct GitHub {
     http: reqwest::Client,
     token: String,
+    #[cfg(test)]
+    api: Option<String>,
 }
 
 impl GitHub {
     pub fn new(http: reqwest::Client, token: String) -> Self {
-        GitHub { http, token }
+        GitHub {
+            http,
+            token,
+            #[cfg(test)]
+            api: None,
+        }
     }
 
     pub fn token(&self) -> &str {
@@ -23,7 +30,10 @@ impl GitHub {
     }
 
     fn req(&self, method: Method, path: &str) -> RequestBuilder {
-        let url = if path.starts_with("http") { path.to_string() } else { format!("{API}{path}") };
+        let api = API;
+        #[cfg(test)]
+        let api = self.api.as_deref().unwrap_or(api);
+        let url = if path.starts_with("http") { path.to_string() } else { format!("{api}{path}") };
         self.http
             .request(method, url)
             .bearer_auth(&self.token)
@@ -205,8 +215,74 @@ fn encode_path(p: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// Return a local client and a server that records every request, including
+    /// unexpected merge calls. Responses are consumed in order.
+    pub fn mock(responses: Vec<String>) -> (GitHub, impl FnOnce() -> Vec<String>) {
+        use std::io::{Read, Write};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let mut gh = GitHub::new(reqwest::Client::builder().no_proxy().build().unwrap(), "test-token".into());
+        gh.api = Some(base.clone());
+        let done = Arc::new(AtomicBool::new(false));
+        let stop = done.clone();
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            let mut responses = responses.into_iter();
+            while !stop.load(Ordering::SeqCst) {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(s) => s,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(e) => panic!("{e}"),
+                };
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut bytes = Vec::new();
+                let mut buf = [0; 4096];
+                loop {
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&buf[..n]);
+                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]);
+                        let len = headers
+                            .lines()
+                            .find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap()))
+                            .unwrap_or(0);
+                        if bytes.len() >= end + 4 + len {
+                            break;
+                        }
+                    }
+                }
+                requests.push(String::from_utf8(bytes).unwrap());
+                let response =
+                    responses.next().unwrap_or_else(|| "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into());
+                stream.write_all(response.replace("{base}", &base).as_bytes()).unwrap();
+            }
+            assert_eq!(responses.count(), 0, "unused mock responses");
+            requests
+        });
+        (gh, move || {
+            done.store(true, Ordering::SeqCst);
+            server.join().unwrap()
+        })
+    }
+
+    pub fn json_response(body: &str, headers: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
+            body.len()
+        )
+    }
 
     #[test]
     fn next_link() {

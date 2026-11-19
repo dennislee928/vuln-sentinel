@@ -286,10 +286,7 @@ async fn has_required_checks(gh: &GitHub, repo: &Repo) -> bool {
     false
 }
 
-async fn enable_auto_merge(gh: &GitHub, repo: &Repo, pr_node_id: &str) -> Result<()> {
-    if repo.admin {
-        let _ = gh.patch(&format!("/repos/{}", repo.full_name), &json!({"allow_auto_merge": true})).await;
-    }
+async fn enable_auto_merge(gh: &GitHub, pr_node_id: &str) -> Result<()> {
     let q = "mutation($id: ID!, $m: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $m}) { clientMutationId } }";
     let mut last = None;
     for m in ["SQUASH", "MERGE", "REBASE"] {
@@ -299,6 +296,14 @@ async fn enable_auto_merge(gh: &GitHub, repo: &Repo, pr_node_id: &str) -> Result
         }
     }
     Err(last.unwrap())
+}
+
+async fn disable_auto_merge(gh: &GitHub, pr: &Value) -> Result<()> {
+    if pr["auto_merge"].is_object() {
+        let q = "mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }";
+        gh.graphql(q, json!({"id": pr["node_id"]})).await?;
+    }
+    Ok(())
 }
 
 /// Delegate to Dependabot where we cannot fix ourselves.
@@ -326,7 +331,7 @@ pub async fn run(gh: &GitHub, state: &mut State, repos: &HashMap<String, Repo>, 
 
     for name in repo_names.into_iter().take(cfg.max_repos) {
         let Some(repo) = repos.get(name) else { continue };
-        if repo.archived {
+        if repo.archived || repo.can_push == Some(false) {
             continue;
         }
         let (mut groups, unfixable) = groups_for(name, &refs, cfg.max_attempts);
@@ -374,6 +379,12 @@ async fn fix_repo(gh: &GitHub, state: &mut State, repo: &Repo, groups: Vec<Group
     let owner = name.split('/').next().unwrap_or_default();
     let open_prs: Vec<Value> = gh.get(&format!("/repos/{name}/pulls?head={owner}:{}&state=open", cfg.branch)).await?;
     let existing = open_prs.into_iter().next();
+    // Cancel server-side auto-merge before pushing updates to an existing PR.
+    if !cfg.auto_merge {
+        if let Some(pr) = &existing {
+            disable_auto_merge(gh, pr).await?;
+        }
+    }
     // Continue an open fix PR's branch; otherwise start fresh from the default branch.
     let base = if existing.is_some() { cfg.branch.as_str() } else { repo.default_branch.as_str() };
     let url = format!("https://x-access-token:{}@github.com/{name}.git", gh.token());
@@ -444,12 +455,9 @@ async fn fix_repo(gh: &GitHub, state: &mut State, repo: &Repo, groups: Vec<Group
     };
     let number = pr["number"].as_u64().unwrap_or(0);
     let _ = gh.post(&format!("/repos/{name}/issues/{number}/labels"), &json!({"labels": [crate::ticket::LABEL, "security"]})).await;
-    let mut auto = state
-        .findings
-        .values()
-        .any(|t| t.pr.as_ref().map(|p| p.number == number && p.auto_merge).unwrap_or(false) && &t.finding.repo == name);
+    let mut auto = cfg.auto_merge && pr["auto_merge"].is_object();
     if !auto && cfg.auto_merge && has_required_checks(gh, repo).await {
-        match enable_auto_merge(gh, repo, pr["node_id"].as_str().unwrap_or_default()).await {
+        match enable_auto_merge(gh, pr["node_id"].as_str().unwrap_or_default()).await {
             Ok(()) => {
                 auto = true;
                 stats.auto_merge_enabled += 1;
@@ -467,13 +475,13 @@ async fn fix_repo(gh: &GitHub, state: &mut State, repo: &Repo, groups: Vec<Group
             }
         }
     }
-    let (title, body) = pr_text(state, name, number, auto);
+    let (title, body) = pr_text(state, name, number, auto, cfg.auto_merge);
     gh.patch(&format!("/repos/{name}/pulls/{number}"), &json!({"title": title, "body": body})).await?;
     Ok(())
 }
 
 /// PR title/body listing everything the PR currently fixes.
-fn pr_text(state: &State, repo: &str, number: u64, auto: bool) -> (String, String) {
+fn pr_text(state: &State, repo: &str, number: u64, auto: bool, auto_merge: bool) -> (String, String) {
     let mut rows: BTreeMap<String, (String, String, String, usize, Option<u64>)> = BTreeMap::new();
     for t in state.findings.values() {
         if t.finding.repo != repo || t.status != Status::FixProposed || t.pr.as_ref().map(|p| p.number) != Some(number) {
@@ -503,8 +511,10 @@ fn pr_text(state: &State, repo: &str, number: u64, auto: bool) -> (String, Strin
     }
     body.push_str(if auto {
         "\nAuto-merge is enabled: this PR merges once the required checks pass."
-    } else {
+    } else if auto_merge {
         "\nvuln-sentinel merges this PR once all CI checks pass. If the repository has no CI, it waits for a manual merge."
+    } else {
+        "\nAutomatic merging is disabled. Review and merge this PR manually."
     });
     body.push_str(" Lockfiles were regenerated with each ecosystem's own tool, with install scripts disabled.\n");
     let n = rows.len();
@@ -536,6 +546,14 @@ pub async fn advance_prs(gh: &GitHub, state: &mut State, cfg: &FixCfg) -> Result
                 }
             }
             continue;
+        }
+        if !cfg.auto_merge && !cfg.dry_run && pr["state"] == "open" {
+            disable_auto_merge(gh, &pr).await?;
+            for t in state.findings.values_mut().filter(|t| t.finding.repo == repo) {
+                if let Some(p) = t.pr.as_mut().filter(|p| p.number == number) {
+                    p.auto_merge = false;
+                }
+            }
         }
         if merged || auto || !cfg.auto_merge || cfg.dry_run {
             continue;
@@ -594,6 +612,72 @@ pub fn ci_verdict(check_runs: &[Value], statuses: &[Value], merge_without_checks
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::github::tests::{json_response, mock};
+
+    #[tokio::test]
+    async fn merging_disabled_cancels_queued_merge_and_never_calls_merge_api() {
+        use crate::model::Finding;
+        let mut state = State::default();
+        let now = chrono::Utc::now();
+        state.findings.insert(
+            "test".into(),
+            Tracked {
+                finding: Finding {
+                    repo: "org/repo".into(),
+                    file: "Cargo.lock".into(),
+                    ecosystem: "crates.io".into(),
+                    package: "pkg".into(),
+                    version: "1.0.0".into(),
+                    vuln_id: "TEST-1".into(),
+                    aliases: vec![],
+                    summary: String::new(),
+                    severity: None,
+                    fixed: Some("1.0.1".into()),
+                    new_today: false,
+                },
+                day: "2026-11-19".into(),
+                status: Status::FixProposed,
+                first_seen: now,
+                last_seen: now,
+                resolved_at: None,
+                issue: None,
+                pr: Some(PrRef { number: 1, url: String::new(), auto_merge: true }),
+                fix_attempts: 1,
+                note: None,
+            },
+        );
+        let mut cfg = FixCfg {
+            dry_run: false,
+            auto_merge: false,
+            merge_without_checks: true,
+            max_repos: 1,
+            max_attempts: 1,
+            max_groups_per_repo: 1,
+            workdir: PathBuf::new(),
+            branch: "fix".into(),
+        };
+        let queued = r#"{"state":"open","merged":false,"node_id":"PR_1","auto_merge":{"enabled_by":{}}}"#;
+        let (gh, finish) = mock(vec![json_response(queued, ""), json_response(r#"{"data":{}}"#, "")]);
+        let stats = advance_prs(&gh, &mut state, &cfg).await.unwrap();
+        assert_eq!(stats.merged, 0);
+        assert!(!state.findings["test"].pr.as_ref().unwrap().auto_merge);
+        let requests = finish();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("GET /repos/org/repo/pulls/1 HTTP/1.1"));
+        assert!(requests[1].starts_with("POST /graphql HTTP/1.1"));
+        assert!(requests[1].contains("disablePullRequestAutoMerge"));
+
+        // Even with merge-without-checks enabled, no direct merge is attempted
+        // for a PR with no queued GitHub auto-merge or when doing a dry run.
+        for (dry_run, pr) in [(false, r#"{"state":"open","merged":false,"auto_merge":null}"#), (true, queued)] {
+            cfg.dry_run = dry_run;
+            let (gh, finish) = mock(vec![json_response(pr, "")]);
+            assert_eq!(advance_prs(&gh, &mut state, &cfg).await.unwrap().merged, 0);
+            assert_eq!(finish().len(), 1);
+        }
+        let (_, body) = pr_text(&state, "org/repo", 1, false, false);
+        assert!(body.contains("Review and merge this PR manually."));
+    }
 
     #[test]
     fn redacts_tokens() {
