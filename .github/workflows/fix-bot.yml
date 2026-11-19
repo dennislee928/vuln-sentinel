@@ -1,0 +1,43 @@
+
+name: Vuln Sentinel Fix Bot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vuln-sentinel-remediation
+  cancel-in-progress: false
+
+jobs:
+  remediation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate bot installation token
+        id: bot
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.VULN_SENTINEL_APP_ID }}
+          private-key: ${{ secrets.VULN_SENTINEL_APP_PRIVATE_KEY }}
+          owner: dennislee928
+
+      - name: Verify installation
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+        run: |
+          gh api /installation/repositories \
+            --jq '.total_count'
+
+      - name: Vuln Sentinel dry run
+        uses: ./
+        with:
+          token: ${{ steps.bot.outputs.token }}
+          mode: scan
+          dry-run: "true"
+          auto-merge: "false"
+          commit-results: "false"
