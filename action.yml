@@ -39,6 +39,12 @@ inputs:
   merge-without-checks:
     description: Also merge fix PRs in repositories that have no CI at all
     default: "false"
+  fix-reviewers:
+    description: Comma-separated GitHub logins to request as fix PR reviewers
+    default: ""
+  fix-assignees:
+    description: Comma-separated GitHub logins to assign to fix PRs
+    default: ""
   dry-run:
     description: Report only; do not create issues, branches or PRs
     default: "false"
@@ -161,6 +167,8 @@ runs:
         IN_REPOS: ${{ inputs.repos }}
         IN_EXCLUDE: ${{ inputs.exclude }}
         IN_TRACKER: ${{ inputs.tracker-repo }}
+        IN_FIX_REVIEWERS: ${{ inputs.fix-reviewers }}
+        IN_FIX_ASSIGNEES: ${{ inputs.fix-assignees }}
       run: |
         set -euo pipefail
         for v in NVD_API_KEY VULNERS_API_KEY ATTACKERKB_API_KEY; do [ -z "${!v}" ] && unset "$v"; done
@@ -180,6 +188,8 @@ runs:
         [ -n "$IN_REPOS" ] && args+=(--repos "$IN_REPOS")
         [ -n "$IN_EXCLUDE" ] && args+=(--exclude "$IN_EXCLUDE")
         [ -n "$IN_TRACKER" ] && args+=(--tracker-repo "$IN_TRACKER")
+        [ -n "$IN_FIX_REVIEWERS" ] && args+=(--fix-reviewers "$IN_FIX_REVIEWERS")
+        [ -n "$IN_FIX_ASSIGNEES" ] && args+=(--fix-assignees "$IN_FIX_ASSIGNEES")
         [ "${{ inputs.include-forks }}" = "true" ] && args+=(--include-forks)
         [ "${{ inputs.include-archived }}" = "true" ] && args+=(--include-archived)
         [ "${{ inputs.merge-without-checks }}" = "true" ] && args+=(--merge-without-checks)

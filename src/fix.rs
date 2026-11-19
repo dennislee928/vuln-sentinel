@@ -23,6 +23,8 @@ pub struct FixCfg {
     pub auto_merge: bool,
     /// Also merge PRs in repos that have no CI checks at all.
     pub merge_without_checks: bool,
+    pub reviewers: Vec<String>,
+    pub assignees: Vec<String>,
     pub max_repos: usize,
     pub max_attempts: u32,
     /// Package groups attempted per repository per run (most severe first).
@@ -55,7 +57,7 @@ struct Group {
 }
 
 async fn sh(dir: &Path, prog: &str, args: &[&str]) -> Result<String> {
-    tracing::debug!("{}$ {prog} {}", dir.display(), args.join(" "));
+    tracing::debug!("{}$ {prog} {}", dir.display(), redact(&args.join(" ")));
     let fut = Command::new(prog)
         .args(args)
         .current_dir(dir)
@@ -72,7 +74,7 @@ async fn sh(dir: &Path, prog: &str, args: &[&str]) -> Result<String> {
         .with_context(|| format!("cannot run {prog} (is it installed?)"))?;
     if !out.status.success() {
         let err = redact(&String::from_utf8_lossy(&out.stderr));
-        bail!("{prog} {}: {}", args.join(" "), err.chars().rev().take(400).collect::<String>().chars().rev().collect::<String>());
+        bail!("{prog} {}: {}", redact(&args.join(" ")), err.chars().rev().take(400).collect::<String>().chars().rev().collect::<String>());
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -306,6 +308,20 @@ async fn disable_auto_merge(gh: &GitHub, pr: &Value) -> Result<()> {
     Ok(())
 }
 
+async fn assign_review(gh: &GitHub, repo: &str, pr: &Value, cfg: &FixCfg) -> Result<()> {
+    let number = pr["number"].as_u64().context("fix PR has no number")?;
+    if !cfg.assignees.is_empty() {
+        gh.post(&format!("/repos/{repo}/issues/{number}/assignees"), &json!({"assignees": cfg.assignees})).await?;
+    }
+    let reviewers: Vec<&String> = cfg.reviewers.iter().filter(|login| {
+        !pr["requested_reviewers"].as_array().into_iter().flatten().any(|r| r["login"].as_str() == Some(login.as_str()))
+    }).collect();
+    if !reviewers.is_empty() {
+        gh.post(&format!("/repos/{repo}/pulls/{number}/requested_reviewers"), &json!({"reviewers": reviewers})).await?;
+    }
+    Ok(())
+}
+
 /// Delegate to Dependabot where we cannot fix ourselves.
 async fn enable_dependabot(gh: &GitHub, repo: &str) -> bool {
     let a = gh.put_status(&format!("/repos/{repo}/vulnerability-alerts")).await;
@@ -477,6 +493,7 @@ async fn fix_repo(gh: &GitHub, state: &mut State, repo: &Repo, groups: Vec<Group
     }
     let (title, body) = pr_text(state, name, number, auto, cfg.auto_merge);
     gh.patch(&format!("/repos/{name}/pulls/{number}"), &json!({"title": title, "body": body})).await?;
+    assign_review(gh, name, &pr, cfg).await?;
     Ok(())
 }
 
@@ -506,7 +523,7 @@ fn pr_text(state: &State, repo: &str, number: u64, auto: bool, auto_merge: bool)
     body.push('\n');
     for (_, _, _, _, issue) in rows.values() {
         if let Some(n) = issue {
-            let _ = writeln!(body, "Closes #{n}");
+            let _ = writeln!(body, "Related issue: #{n} (closed after a clean default-branch scan).");
         }
     }
     body.push_str(if auto {
@@ -650,6 +667,8 @@ mod tests {
             dry_run: false,
             auto_merge: false,
             merge_without_checks: true,
+            reviewers: vec![],
+            assignees: vec![],
             max_repos: 1,
             max_attempts: 1,
             max_groups_per_repo: 1,

@@ -97,6 +97,12 @@ pub struct Opts {
     /// Also merge fix PRs in repositories that have no CI at all.
     #[arg(long, global = true)]
     merge_without_checks: bool,
+    /// Comma-separated GitHub logins to request as fix PR reviewers.
+    #[arg(long, value_delimiter = ',', global = true)]
+    fix_reviewers: Vec<String>,
+    /// Comma-separated GitHub logins to assign to fix PRs.
+    #[arg(long, value_delimiter = ',', global = true)]
+    fix_assignees: Vec<String>,
     /// Maximum repositories to open fix PRs in per run.
     #[arg(long, default_value_t = 40, global = true)]
     max_fix_repos: usize,
@@ -260,6 +266,8 @@ impl App {
             dry_run: self.opts.dry_run,
             auto_merge: self.opts.auto_merge,
             merge_without_checks: self.opts.merge_without_checks,
+            reviewers: self.opts.fix_reviewers.clone(),
+            assignees: self.opts.fix_assignees.clone(),
             max_repos: self.opts.max_fix_repos,
             max_attempts: self.opts.max_fix_attempts,
             max_groups_per_repo: self.opts.max_fix_groups,
