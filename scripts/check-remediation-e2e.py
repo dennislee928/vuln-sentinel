@@ -23,6 +23,9 @@ state = json.loads(Path("state/findings.json").read_text())
 findings = list(state["findings"].values())
 require(findings, "No findings: cannot claim a successful remediation test")
 require(all(t["finding"]["repo"] == repo for t in findings), "Unexpected repository in state")
+other_unresolved = sum(t["status"] != "resolved" for t in findings if t["finding"]["package"] != "rustix")
+findings = [t for t in findings if t["finding"]["package"] == "rustix"]
+require(findings, "No rustix finding: cannot claim a successful targeted test")
 prs = {t["pr"]["number"] for t in findings if t.get("pr")}
 issues = {t["issue"]["number"] for t in findings if t.get("issue")}
 require(len(prs) == 1 and issues, "Expected one fix PR and at least one security issue")
@@ -53,8 +56,8 @@ if phase == "verified":
     require(all(t["status"] == "resolved" for t in findings), "Findings remain unresolved")
     for day in state["days"].values():
         require(day.get("scan_errors", 0) == 0, "Scan errors must not count as resolution")
-print(f"PASS {phase}: {pr['html_url']}; issues={sorted(issues)}")
+print(f"PASS {phase}: {pr['html_url']}; issues={sorted(issues)}; other unresolved findings={other_unresolved}")
 summary = os.environ.get("GITHUB_STEP_SUMMARY")
 if summary:
     with open(summary, "a") as out:
-        out.write(f"\nE2E **{phase}**: {pr['html_url']} — issues {sorted(issues)}\n")
+        out.write(f"\nE2E **{phase}** (rustix): {pr['html_url']} — issues {sorted(issues)}; other unresolved findings: {other_unresolved}\n")

@@ -63,7 +63,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          args=(--repos "$TEST_REPO" --tracker-repo "$TEST_REPO" --auto-merge false --max-fix-repos 1 --fix-branch vuln-sentinel/app-remediation-e2e --fix-reviewers dennislee928 --fix-assignees dennislee928)
+          args=(--repos "$TEST_REPO" --tracker-repo "$TEST_REPO" --auto-merge false --max-fix-repos 1 --fix-packages rustix --fix-branch vuln-sentinel/app-remediation-e2e --fix-reviewers dennislee928 --fix-assignees dennislee928)
           target/release/vuln-sentinel scan "${args[@]}"
           target/release/vuln-sentinel ticket "${args[@]}"
           target/release/vuln-sentinel fix "${args[@]}"

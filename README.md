@@ -72,6 +72,8 @@ A change is committed only after re-parsing the lockfile confirms the vulnerable
 
 ## Merge policy
 
+Set `fix-reviewers` and `fix-assignees` (comma-separated GitHub logins) to request human review and assign fix PRs. The scoped token supplied through `token` is used for pushes, PR creation and review requests; use `auth-mode: app` with an installation token for Bot authorship. `fix-packages` optionally limits remediation to named packages while scans and reports continue to include every finding. Fix PRs link related issues without closing keywords, so issues close only after verification finds the vulnerable versions gone from the default branch.
+
 - Automatic merging defaults to **off** in both the Action and CLI. Production remediation workflows should explicitly set `auto-merge: "false"` and `merge-without-checks: "false"`.
 - With `auto-merge: false`, neither GitHub auto-merge enablement nor the direct merge API runs. Existing auto-merge is disabled on tracked open fix PRs during `verify`, and before updating an existing fix PR. Dry runs do not change GitHub settings or PRs.
 - If you explicitly opt into `auto-merge: true`, GitHub auto-merge is requested when required checks exist and repository settings already permit it. Otherwise `verify` merges after all checks pass. Repositories with no CI require manual merge unless `merge-without-checks: true` is also set.

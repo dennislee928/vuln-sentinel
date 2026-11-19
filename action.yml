@@ -45,6 +45,9 @@ inputs:
   fix-assignees:
     description: Comma-separated GitHub logins to assign to fix PRs
     default: ""
+  fix-packages:
+    description: Comma-separated package names to fix (empty means all; scanning still reports all findings)
+    default: ""
   dry-run:
     description: Report only; do not create issues, branches or PRs
     default: "false"
@@ -169,6 +172,7 @@ runs:
         IN_TRACKER: ${{ inputs.tracker-repo }}
         IN_FIX_REVIEWERS: ${{ inputs.fix-reviewers }}
         IN_FIX_ASSIGNEES: ${{ inputs.fix-assignees }}
+        IN_FIX_PACKAGES: ${{ inputs.fix-packages }}
       run: |
         set -euo pipefail
         for v in NVD_API_KEY VULNERS_API_KEY ATTACKERKB_API_KEY; do [ -z "${!v}" ] && unset "$v"; done
@@ -190,6 +194,7 @@ runs:
         [ -n "$IN_TRACKER" ] && args+=(--tracker-repo "$IN_TRACKER")
         [ -n "$IN_FIX_REVIEWERS" ] && args+=(--fix-reviewers "$IN_FIX_REVIEWERS")
         [ -n "$IN_FIX_ASSIGNEES" ] && args+=(--fix-assignees "$IN_FIX_ASSIGNEES")
+        [ -n "$IN_FIX_PACKAGES" ] && args+=(--fix-packages "$IN_FIX_PACKAGES")
         [ "${{ inputs.include-forks }}" = "true" ] && args+=(--include-forks)
         [ "${{ inputs.include-archived }}" = "true" ] && args+=(--include-archived)
         [ "${{ inputs.merge-without-checks }}" = "true" ] && args+=(--merge-without-checks)

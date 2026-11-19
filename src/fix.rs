@@ -25,6 +25,7 @@ pub struct FixCfg {
     pub merge_without_checks: bool,
     pub reviewers: Vec<String>,
     pub assignees: Vec<String>,
+    pub packages: Vec<String>,
     pub max_repos: usize,
     pub max_attempts: u32,
     /// Package groups attempted per repository per run (most severe first).
@@ -342,7 +343,7 @@ fn note_group(state: &mut State, key: &str, note: String) {
 pub async fn run(gh: &GitHub, state: &mut State, repos: &HashMap<String, Repo>, cfg: &FixCfg) -> Result<FixStats> {
     let mut stats = FixStats::default();
     let items: Vec<Tracked> = state.unresolved().cloned().collect();
-    let refs: Vec<&Tracked> = items.iter().collect();
+    let refs: Vec<&Tracked> = items.iter().filter(|t| cfg.packages.is_empty() || cfg.packages.contains(&t.finding.package)).collect();
     let mut repo_names: Vec<&String> = refs.iter().filter(|t| t.status == Status::Open).map(|t| &t.finding.repo).collect();
     repo_names.sort();
     repo_names.dedup();
@@ -671,6 +672,7 @@ mod tests {
             merge_without_checks: true,
             reviewers: vec![],
             assignees: vec![],
+            packages: vec![],
             max_repos: 1,
             max_attempts: 1,
             max_groups_per_repo: 1,
@@ -698,6 +700,45 @@ mod tests {
         }
         let (_, body) = pr_text(&state, "org/repo", 1, false, false);
         assert!(body.contains("Review and merge this PR manually."));
+
+        cfg.assignees = vec!["dennislee928".into()];
+        cfg.reviewers = vec!["dennislee928".into()];
+        let (gh, finish) = mock(vec![json_response("{}", ""), json_response("{}", "")]);
+        assign_review(&gh, "org/repo", &json!({"number": 1, "requested_reviewers": []}), &cfg).await.unwrap();
+        let requests = finish();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("POST /repos/org/repo/issues/1/assignees HTTP/1.1"));
+        assert!(requests[1].starts_with("POST /repos/org/repo/pulls/1/requested_reviewers HTTP/1.1"));
+        for request in &requests {
+            assert!(request.contains("authorization: Bearer test-token"));
+            assert!(request.contains("dennislee928"));
+        }
+
+        state.findings.get_mut("test").unwrap().issue =
+            Some(crate::state::IssueRef { repo: "org/repo".into(), number: 10, url: String::new(), body_hash: 0, open: true });
+        let (_, body) = pr_text(&state, "org/repo", 1, false, false);
+        assert!(body.contains("Related issue: #10"));
+        assert!(!body.contains("Closes #10"));
+
+        cfg.packages = vec!["a-different-package".into()];
+        cfg.dry_run = false;
+        state.findings.get_mut("test").unwrap().status = Status::Open;
+        let (gh, finish) = mock(vec![]);
+        let repos = [(
+            "org/repo".into(),
+            Repo {
+                full_name: "org/repo".into(),
+                default_branch: "main".into(),
+                archived: false,
+                fork: false,
+                private: false,
+                has_issues: true,
+                can_push: Some(true),
+            },
+        )]
+        .into();
+        assert_eq!(run(&gh, &mut state, &repos, &cfg).await.unwrap().repos_attempted, 0);
+        assert!(finish().is_empty());
     }
 
     #[test]

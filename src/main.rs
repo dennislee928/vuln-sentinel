@@ -103,6 +103,9 @@ pub struct Opts {
     /// Comma-separated GitHub logins to assign to fix PRs.
     #[arg(long, value_delimiter = ',', global = true)]
     fix_assignees: Vec<String>,
+    /// Restrict fixes to these package names; scanning still reports all findings.
+    #[arg(long, value_delimiter = ',', global = true)]
+    fix_packages: Vec<String>,
     /// Maximum repositories to open fix PRs in per run.
     #[arg(long, default_value_t = 40, global = true)]
     max_fix_repos: usize,
@@ -268,6 +271,7 @@ impl App {
             merge_without_checks: self.opts.merge_without_checks,
             reviewers: self.opts.fix_reviewers.clone(),
             assignees: self.opts.fix_assignees.clone(),
+            packages: self.opts.fix_packages.clone(),
             max_repos: self.opts.max_fix_repos,
             max_attempts: self.opts.max_fix_attempts,
             max_groups_per_repo: self.opts.max_fix_groups,
