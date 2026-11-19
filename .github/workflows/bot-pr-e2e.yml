@@ -1,0 +1,102 @@
+
+name: GitHub App PR E2E
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vuln-sentinel-bot-e2e
+  cancel-in-progress: false
+
+jobs:
+  bot-pr-e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate scoped GitHub App token
+        id: bot
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.VULN_SENTINEL_APP_ID }}
+          private-key: ${{ secrets.VULN_SENTINEL_APP_PRIVATE_KEY }}
+          owner: dennislee928
+          repositories: vuln-sentinel-e2e-lab
+
+      - name: Create branch, commit, PR and review request
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          TEST_REPO: dennislee928/vuln-sentinel-e2e-lab
+          REVIEWER: dennislee928
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE=$(gh api "repos/$TEST_REPO" \
+            --jq '.default_branch')
+
+          SHA=$(gh api \
+            "repos/$TEST_REPO/git/ref/heads/$BASE" \
+            --jq '.object.sha')
+
+          BRANCH="vuln-sentinel/e2e-${GITHUB_RUN_ID}"
+
+          echo "Creating branch: $BRANCH"
+
+          gh api --method POST \
+            "repos/$TEST_REPO/git/refs" \
+            -f ref="refs/heads/$BRANCH" \
+            -f sha="$SHA" >/dev/null
+
+          CONTENT=$(printf \
+            'GitHub App E2E validation\nRun ID: %s\n' \
+            "$GITHUB_RUN_ID" | base64 -w 0)
+
+          gh api --method PUT \
+            "repos/$TEST_REPO/contents/e2e/bot-proof.md" \
+            -f message="test: GitHub App E2E proof" \
+            -f content="$CONTENT" \
+            -f branch="$BRANCH" >/dev/null
+
+          PR=$(gh api --method POST \
+            "repos/$TEST_REPO/pulls" \
+            -f title="test: GitHub App PR E2E" \
+            -f body="E2E validation only. Do not auto-merge." \
+            -f head="$BRANCH" \
+            -f base="$BASE" \
+            --jq '.number')
+
+          echo "PR number: $PR"
+
+          gh api --method POST \
+            "repos/$TEST_REPO/pulls/$PR/requested_reviewers" \
+            -f "reviewers[]=$REVIEWER" >/dev/null
+
+          echo "=== E2E result ==="
+
+          gh api "repos/$TEST_REPO/pulls/$PR" \
+            --jq '{
+              url: .html_url,
+              author: .user.login,
+              state: .state,
+              merged: .merged,
+              reviewers: [.requested_reviewers[].login]
+            }'
+
+          AUTHOR=$(gh api \
+            "repos/$TEST_REPO/pulls/$PR" \
+            --jq '.user.login')
+
+          test "$AUTHOR" = \
+            "vuln-sentinel-fix-bot[bot]"
+
+          REVIEW_COUNT=$(gh api \
+            "repos/$TEST_REPO/pulls/$PR" \
+            --jq '[.requested_reviewers[].login
+              | select(. == "dennislee928")] | length')
+
+          test "$REVIEW_COUNT" -eq 1
+
+          echo "PASS: Bot authored PR and requested reviewer"
