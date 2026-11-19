@@ -313,9 +313,11 @@ async fn assign_review(gh: &GitHub, repo: &str, pr: &Value, cfg: &FixCfg) -> Res
     if !cfg.assignees.is_empty() {
         gh.post(&format!("/repos/{repo}/issues/{number}/assignees"), &json!({"assignees": cfg.assignees})).await?;
     }
-    let reviewers: Vec<&String> = cfg.reviewers.iter().filter(|login| {
-        !pr["requested_reviewers"].as_array().into_iter().flatten().any(|r| r["login"].as_str() == Some(login.as_str()))
-    }).collect();
+    let reviewers: Vec<&String> = cfg
+        .reviewers
+        .iter()
+        .filter(|login| !pr["requested_reviewers"].as_array().into_iter().flatten().any(|r| r["login"].as_str() == Some(login.as_str())))
+        .collect();
     if !reviewers.is_empty() {
         gh.post(&format!("/repos/{repo}/pulls/{number}/requested_reviewers"), &json!({"reviewers": reviewers})).await?;
     }
