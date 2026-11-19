@@ -1,0 +1,98 @@
+name: Rust Fixer Remediation E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Create a fix PR, or verify after human approval and merge
+        type: choice
+        options: [remediate, verify]
+        default: remediate
+      state-run-id:
+        description: Remediation run ID whose state to verify (required for verify)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: vuln-sentinel-remediation-e2e
+  cancel-in-progress: false
+
+jobs:
+  remediation-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TEST_REPO: dennislee928/vuln-sentinel-e2e-lab
+      VS_AUTH_MODE: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the Rust fixer from this exact commit
+        run: cargo build --release --locked
+      - name: Restore findings from the remediation run
+        if: inputs.phase == 'verify'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE_RUN_ID: ${{ inputs.state-run-id }}
+        run: |
+          set -euo pipefail
+          [[ "$STATE_RUN_ID" =~ ^[0-9]+$ ]]
+          gh run download "$STATE_RUN_ID" -R "$GITHUB_REPOSITORY" --name remediation-e2e-state --dir state
+      - name: Generate a token scoped to the lab
+        id: bot
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.VULN_SENTINEL_APP_ID }}
+          private-key: ${{ secrets.VULN_SENTINEL_APP_PRIVATE_KEY }}
+          owner: dennislee928
+          repositories: vuln-sentinel-e2e-lab
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - name: Scan, open issue and fix with the Rust binary
+        if: inputs.phase == 'remediate'
+        env:
+          VS_TOKEN: ${{ steps.bot.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--repos "$TEST_REPO" --auto-merge false --max-fix-repos 1 --max-fix-groups 1 --fix-reviewers dennislee928 --fix-assignees dennislee928)
+          target/release/vuln-sentinel scan "${args[@]}"
+          target/release/vuln-sentinel ticket "${args[@]}"
+          target/release/vuln-sentinel fix "${args[@]}"
+          target/release/vuln-sentinel ticket "${args[@]}"
+      - name: Verify merged default branch and close resolved issue
+        if: inputs.phase == 'verify'
+        env:
+          VS_TOKEN: ${{ steps.bot.outputs.token }}
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-remediation-e2e.py before-verify
+          target/release/vuln-sentinel verify --repos "$TEST_REPO" --auto-merge false
+          python3 scripts/check-remediation-e2e.py verified
+      - name: Assert Bot author, reviewer and disabled merge
+        if: inputs.phase == 'remediate'
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+        run: python3 scripts/check-remediation-e2e.py proposed
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remediation-e2e-state
+          path: state/findings.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remediation-e2e-reports
+          path: reports/
+          if-no-files-found: ignore
