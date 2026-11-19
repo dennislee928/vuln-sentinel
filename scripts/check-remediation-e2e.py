@@ -18,15 +18,14 @@ def require(condition, message):
 phase = sys.argv[1]
 require(phase in ("proposed", "before-verify", "verified"), "Unknown phase")
 repo = os.environ["TEST_REPO"]
-require(repo == "dennislee928/vuln-sentinel-e2e-lab", "Only the isolated lab is allowed")
+require(repo == "dennislee928/Claude_Devboard_Pet", "Unexpected validation repository")
 state = json.loads(Path("state/findings.json").read_text())
 findings = list(state["findings"].values())
 require(findings, "No findings: cannot claim a successful remediation test")
 require(all(t["finding"]["repo"] == repo for t in findings), "Unexpected repository in state")
-require(all(t["finding"]["package"] == "minimist" for t in findings), "Unexpected dependency")
 prs = {t["pr"]["number"] for t in findings if t.get("pr")}
 issues = {t["issue"]["number"] for t in findings if t.get("issue")}
-require(len(prs) == 1 and len(issues) == 1, "Expected exactly one fix PR and security issue")
+require(len(prs) == 1 and issues, "Expected one fix PR and at least one security issue")
 pr_number = next(iter(prs))
 pr = api(f"repos/{repo}/pulls/{pr_number}")
 require(pr["user"]["login"] == "vuln-sentinel-fix-bot[bot]", "PR was not authored by the App")

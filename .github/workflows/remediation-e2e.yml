@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      TEST_REPO: dennislee928/vuln-sentinel-e2e-lab
+      TEST_REPO: dennislee928/Claude_Devboard_Pet
       VS_AUTH_MODE: app
     steps:
       - uses: actions/checkout@v4
@@ -45,14 +45,14 @@ jobs:
           set -euo pipefail
           [[ "$STATE_RUN_ID" =~ ^[0-9]+$ ]]
           gh run download "$STATE_RUN_ID" -R "$GITHUB_REPOSITORY" --name remediation-e2e-state --dir state
-      - name: Generate a token scoped to the lab
+      - name: Generate a token scoped to the validation repository
         id: bot
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ vars.VULN_SENTINEL_APP_ID }}
           private-key: ${{ secrets.VULN_SENTINEL_APP_PRIVATE_KEY }}
           owner: dennislee928
-          repositories: vuln-sentinel-e2e-lab
+          repositories: Claude_Devboard_Pet
           permission-contents: write
           permission-pull-requests: write
           permission-issues: write
@@ -63,7 +63,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          args=(--repos "$TEST_REPO" --auto-merge false --max-fix-repos 1 --max-fix-groups 1 --fix-reviewers dennislee928 --fix-assignees dennislee928)
+          args=(--repos "$TEST_REPO" --tracker-repo "$TEST_REPO" --auto-merge false --max-fix-repos 1 --fix-branch vuln-sentinel/app-remediation-e2e --fix-reviewers dennislee928 --fix-assignees dennislee928)
           target/release/vuln-sentinel scan "${args[@]}"
           target/release/vuln-sentinel ticket "${args[@]}"
           target/release/vuln-sentinel fix "${args[@]}"
@@ -77,7 +77,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/check-remediation-e2e.py before-verify
-          target/release/vuln-sentinel verify --repos "$TEST_REPO" --auto-merge false
+          target/release/vuln-sentinel verify --repos "$TEST_REPO" --tracker-repo "$TEST_REPO" --auto-merge false --fix-branch vuln-sentinel/app-remediation-e2e
           python3 scripts/check-remediation-e2e.py verified
       - name: Assert Bot author, reviewer and disabled merge
         if: inputs.phase == 'remediate'
