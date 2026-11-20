@@ -1,4 +1,6 @@
+mod app_auth;
 mod archive;
+mod coverage;
 mod feeds;
 mod fix;
 mod github;
@@ -43,6 +45,9 @@ enum Cmd {
     Archive,
     /// Run the whole pipeline.
     Run,
+    /// Report which scan targets the GitHub App can see and remediate.
+    /// Needs a PAT in --token plus the App id and private key.
+    Coverage,
 }
 
 #[derive(clap::Args, Clone)]
@@ -126,6 +131,15 @@ pub struct Opts {
     /// Scratch directory for clones (default: $RUNNER_TEMP or ./.vs-work).
     #[arg(long, global = true)]
     workdir: Option<PathBuf>,
+    /// `coverage`: GitHub App id.
+    #[arg(long, env = "VS_APP_ID", global = true)]
+    app_id: Option<String>,
+    /// `coverage`: path to the GitHub App private key (PEM).
+    #[arg(long, env = "VS_APP_PRIVATE_KEY_FILE", global = true)]
+    app_private_key_file: Option<PathBuf>,
+    /// `coverage`: the GitHub App private key itself (PEM), e.g. from a secret.
+    #[arg(long, env = "VS_APP_PRIVATE_KEY", hide_env_values = true, global = true, conflicts_with = "app_private_key_file")]
+    app_private_key: Option<String>,
     #[arg(long, env = "NVD_API_KEY", hide_env_values = true, global = true)]
     nvd_api_key: Option<String>,
     #[arg(long, env = "VULNERS_API_KEY", hide_env_values = true, global = true)]
@@ -341,6 +355,35 @@ impl App {
     }
 
     /// Full pipeline, waiting a bounded time for fix PRs to merge.
+    async fn coverage(&mut self) -> Result<()> {
+        if std::env::var("VS_AUTH_MODE").as_deref() == Ok("app") {
+            anyhow::bail!("coverage compares the App against what a PAT sees; pass a PAT in --token and unset VS_AUTH_MODE=app");
+        }
+        let app_id = self.opts.app_id.clone().context("coverage needs --app-id (VS_APP_ID)")?;
+        let key = match (&self.opts.app_private_key, &self.opts.app_private_key_file) {
+            (Some(k), _) => k.clone(),
+            (None, Some(f)) => std::fs::read_to_string(f).with_context(|| format!("reading {}", f.display()))?,
+            (None, None) => anyhow::bail!("coverage needs --app-private-key-file (VS_APP_PRIVATE_KEY_FILE) or VS_APP_PRIVATE_KEY"),
+        };
+        let jwt = app_auth::app_jwt(&app_id, &key, Utc::now().timestamp())?;
+        let c = coverage::collect(&self.gh, &self.gh.with_token(jwt), &self.filter(), self.opts.concurrency).await?;
+        std::fs::create_dir_all(&self.opts.report_dir)?;
+        let base = self.opts.report_dir.join(format!("coverage-{}", self.date));
+        std::fs::write(base.with_extension("md"), coverage::render(&self.date, &c))?;
+        std::fs::write(base.with_extension("json"), serde_json::to_string_pretty(&c)?)?;
+        println!(
+            "App sees {} of {} scan targets; fixable {}, scan-only {}, not selected {}, not installed {} ({})",
+            c.visible(),
+            c.targets,
+            c.count("fixable"),
+            c.count("scan-only"),
+            c.count("not selected"),
+            c.count("not installed"),
+            base.with_extension("md").display()
+        );
+        Ok(())
+    }
+
     async fn run(&mut self) -> Result<()> {
         self.collect().await?;
         self.scan(None).await?;
@@ -411,6 +454,7 @@ async fn main() -> Result<()> {
         Cmd::Verify => app.verify().await?,
         Cmd::Archive => app.archive().await?,
         Cmd::Run => app.run().await?,
+        Cmd::Coverage => app.coverage().await?,
     }
     Ok(())
 }

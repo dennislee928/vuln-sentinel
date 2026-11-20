@@ -38,6 +38,25 @@ For a GitHub App installation token, set `auth-mode: app` in the action's `with`
 
 For remediation, grant the installation **Contents: write**, **Pull requests: write**, and **Issues: write** on the target repositories. Installation access alone does not imply write access: `permissions.admin` is not used to authorize fixes. In PAT mode, an explicit `permissions.push: false` skips remediation. In App mode that field is ignored, because installation listings report user-style permissions that are always false for a Bot; GitHub enforces the installation token's permissions during branch pushes and PR creation. A scan-only installation needs Contents read access. The bot does not change repository settings to enable auto-merge or bypass branch protections.
 
+An installation token covers one account, and only the repositories selected for that installation. Repository and issue listings fail rather than return a partial list when pagination is cut short or `total_count` disagrees.
+
+### Coverage
+
+`vuln-sentinel coverage` shows which scan targets the App can actually remediate. It compares the repositories a PAT sees (with the usual `--owners`, `--include-forks` and similar filters) against every App installation, listed with the App's own JWT. It writes `reports/coverage-<date>.md` and `.json`.
+
+```sh
+VS_TOKEN=<PAT> VS_APP_ID=<app id> VS_APP_PRIVATE_KEY_FILE=app.pem vuln-sentinel coverage
+```
+
+Each target gets one of four statuses:
+
+- **fixable:** the token was granted Contents, Pull requests and Issues write, and the repository has an active Actions workflow.
+- **scan-only:** a permission is missing, there's no CI, or the repository is archived.
+- **not selected:** the owner has an installation that doesn't include the repository.
+- **not installed:** the owner has no installation at all.
+
+Only a human can widen repository access or install the App on an organization; the report lists exactly what to change.
+
 ## Sources
 
 | Source | How | Key |

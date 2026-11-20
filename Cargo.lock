@@ -1595,11 +1595,13 @@ name = "vuln-sentinel"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "futures",
  "regex",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "tempfile",
