@@ -11,8 +11,9 @@ pub struct Repo {
     pub fork: bool,
     pub private: bool,
     pub has_issues: bool,
-    /// PAT push permission, when supplied. Installation listings may omit it;
-    /// Git push and PR creation then enforce the token's actual permissions.
+    /// PAT push permission, when supplied. Always `None` in App mode: installation
+    /// listings report user-style `permissions` (all false for a Bot), so Git push
+    /// and PR creation enforce the installation token's actual permissions instead.
     pub can_push: Option<bool>,
 }
 
@@ -46,7 +47,7 @@ async fn list_with_mode(gh: &GitHub, f: &RepoFilter, mode: &str) -> Result<Vec<R
                 fork: r["fork"].as_bool().unwrap_or(false),
                 private: r["private"].as_bool().unwrap_or(true),
                 has_issues: r["has_issues"].as_bool().unwrap_or(true),
-                can_push: r["permissions"]["push"].as_bool(),
+                can_push: if mode == "app" { None } else { r["permissions"]["push"].as_bool() },
             })
         })
         .filter(|r| keep(r, f))
@@ -84,7 +85,7 @@ mod tests {
     #[tokio::test]
     async fn app_envelope_pagination_and_pat_array() {
         let first = r#"{"repositories":[{"full_name":"org/b"}]}"#;
-        let second = r#"{"repositories":[{"full_name":"org/a"}]}"#;
+        let second = r#"{"repositories":[{"full_name":"org/a","permissions":{"admin":false,"push":false,"pull":false}}]}"#;
         let (gh, finish) = mock(vec![
             json_response(first, "Link: <{base}/installation/repositories?per_page=100&page=2>; rel=\"next\"\r\n"),
             json_response(second, ""),

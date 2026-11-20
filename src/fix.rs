@@ -349,8 +349,12 @@ pub async fn run(gh: &GitHub, state: &mut State, repos: &HashMap<String, Repo>, 
     repo_names.dedup();
 
     for name in repo_names.into_iter().take(cfg.max_repos) {
-        let Some(repo) = repos.get(name) else { continue };
+        let Some(repo) = repos.get(name) else {
+            tracing::warn!("fix {name}: repository not in the accessible repository list; skipped");
+            continue;
+        };
         if repo.archived || repo.can_push == Some(false) {
+            tracing::warn!("fix {name}: archived or token lacks push permission; skipped");
             continue;
         }
         let (mut groups, unfixable) = groups_for(name, &refs, cfg.max_attempts);
