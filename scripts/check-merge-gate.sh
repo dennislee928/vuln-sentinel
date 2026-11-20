@@ -14,7 +14,7 @@ expect_reject() {
   local out
   if out=$(gh api "$@" 2>&1); then
     bad "$label was ACCEPTED: $out"
-  elif grep -qiE 'rule|review|protect|approv|status check|auto.?merge|not allowed|pull request' <<<"$out"; then
+  elif grep -qiE 'rule|review|protect|approv|status check|auto.?merge|not allowed|pull request|delete the default branch' <<<"$out"; then
     pass "$label rejected — $(tr '\n' ' ' <<<"$out" | cut -c1-200)"
   else
     bad "$label rejected for an unrelated reason: $out"
