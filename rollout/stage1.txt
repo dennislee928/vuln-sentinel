@@ -1,1 +1,4 @@
 # Stage 1: five low-risk repositories named by the owner
+# pokemon: npm lockfile at Pokemon/package-lock.json. Only CI is a Cloudflare Pages deploy;
+# needs a non-deploy required check before its ruleset can be applied.
+dennislee928/pokemon
