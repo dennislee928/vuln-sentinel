@@ -1,7 +1,7 @@
 # Stage 1: five low-risk repositories named by the owner
 # pokemon: npm lockfile at Pokemon/package-lock.json. Only CI is a Cloudflare Pages deploy;
-# SCAN-ONLY until it has a non-deploy CI check: do not run fix or apply-ruleset against it.
-dennislee928/pokemon
+# Lines ending in 'scan-only' are scanned but never fixed (no ruleset / no test CI yet).
+dennislee928/pokemon scan-only
 dennislee928/Feeder-of-the-Future-Prize
 dennislee928/UAD_LANG
 dennislee928/firmware-research-demo

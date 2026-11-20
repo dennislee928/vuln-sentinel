@@ -1,0 +1,114 @@
+name: Rollout Stage
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Stage number (reads rollout/stage<N>.txt)
+        type: choice
+        options: ['1', '2', '3', '4']
+        default: '1'
+      phase:
+        description: scan = dry run; fix = open gated fix PRs; verify = rescan after human merges
+        type: choice
+        options: [scan, fix, verify]
+        default: scan
+      state-run-id:
+        description: Run ID of the fix phase whose state to verify (verify only)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: vuln-sentinel-rollout
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VS_AUTH_MODE: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: actions/setup-go@v5
+        with: { go-version: stable, cache: false }
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: Read stage targets
+        id: targets
+        env:
+          STAGE: ${{ inputs.stage }}
+        run: |
+          set -euo pipefail
+          f="rollout/stage${STAGE}.txt"
+          all=$(grep -vE '^\s*(#|$)' "$f" | awk '{print $1}')
+          fix=$(grep -vE '^\s*(#|$)' "$f" | awk '$2 != "scan-only" {print $1}')
+          for r in $all; do [[ "$r" =~ ^dennislee928/[A-Za-z0-9_.-]+$ ]] || { echo "bad target $r"; exit 1; }; done
+          echo "all=$(paste -sd, <<<"$all")" >> "$GITHUB_OUTPUT"
+          echo "fix=$(paste -sd, <<<"$fix")" >> "$GITHUB_OUTPUT"
+          echo "names=$(sed 's|.*/||' <<<"$all" | paste -sd, -)" >> "$GITHUB_OUTPUT"
+          echo "count=$(wc -l <<<"$fix" | tr -d ' ')" >> "$GITHUB_OUTPUT"
+      - name: Restore state from fix run
+        if: inputs.phase == 'verify'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE_RUN_ID: ${{ inputs.state-run-id }}
+        run: |
+          set -euo pipefail
+          [[ "$STATE_RUN_ID" =~ ^[0-9]+$ ]]
+          gh run download "$STATE_RUN_ID" -R "$GITHUB_REPOSITORY" --name rollout-state --dir state
+      - name: Generate App token scoped to the stage
+        id: bot
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.VULN_SENTINEL_APP_ID }}
+          private-key: ${{ secrets.VULN_SENTINEL_APP_PRIVATE_KEY }}
+          owner: dennislee928
+          repositories: ${{ steps.targets.outputs.names }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - name: Run phase
+        env:
+          VS_TOKEN: ${{ steps.bot.outputs.token }}
+          PHASE: ${{ inputs.phase }}
+          ALL: ${{ steps.targets.outputs.all }}
+          FIX: ${{ steps.targets.outputs.fix }}
+          COUNT: ${{ steps.targets.outputs.count }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No tracker issue: this ops repo is public. Per-repo issues still go to each target.
+          vs() { env -u GITHUB_REPOSITORY target/release/vuln-sentinel "$@" --auto-merge false --merge-without-checks false --fix-reviewers dennislee928 --fix-assignees dennislee928; }
+          case "$PHASE" in
+            scan)   vs scan --repos "$ALL" --dry-run
+                    vs fix --repos "$FIX" --dry-run --max-fix-repos "$COUNT" ;;
+            fix)    vs scan --repos "$ALL"
+                    vs ticket --repos "$ALL"
+                    vs fix --repos "$FIX" --max-fix-repos "$COUNT"
+                    vs ticket --repos "$ALL" ;;
+            verify) vs verify --repos "$FIX" ;;
+          esac
+      - name: Assert fix PRs are Bot-authored, gated, not auto-merged
+        if: inputs.phase != 'scan'
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+        run: python3 scripts/check-rollout.py "${{ inputs.phase }}"
+      - uses: actions/upload-artifact@v4
+        if: always() && inputs.phase != 'scan'
+        with:
+          name: rollout-state
+          path: state/findings.json
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rollout-reports
+          path: reports/
+          if-no-files-found: ignore
