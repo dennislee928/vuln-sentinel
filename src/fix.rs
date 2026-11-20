@@ -132,6 +132,11 @@ fn edit_package_json(path: &Path, name: &str, target: &str, override_key: &[&str
     Ok(())
 }
 
+/// The `go` directive (minimum Go version) of a go.mod file.
+fn go_directive(gomod: &str) -> Option<String> {
+    gomod.lines().find_map(|l| l.trim().strip_prefix("go ").map(|v| v.trim().to_string()))
+}
+
 /// Rewrite `name==old` pins in a requirements file.
 pub fn bump_requirements(content: &str, name: &str, target: &str) -> String {
     let norm = |s: &str| s.to_lowercase().replace(['_', '.'], "-");
@@ -180,8 +185,15 @@ async fn apply(root: &Path, file: &str, g: &Group, old: &[String]) -> Result<()>
             sh(&dir, "pnpm", &["install", "--lockfile-only", "--ignore-scripts"]).await?;
         }
         "go" => {
+            let before = go_directive(&std::fs::read_to_string(dir.join("go.mod"))?);
             sh(&dir, "go", &["get", &format!("{name}@{target}")]).await?;
             sh(&dir, "go", &["mod", "tidy"]).await?;
+            let after = go_directive(&std::fs::read_to_string(dir.join("go.mod"))?);
+            if let (Some(b), Some(a)) = (&before, &after) {
+                if cmp_versions(a, b) == Ordering::Greater {
+                    bail!("the upgrade raises the module's `go` directive from {b} to {a}; a toolchain upgrade needs a human");
+                }
+            }
         }
         "requirements" => {
             let c = std::fs::read_to_string(&path)?;
@@ -821,5 +833,14 @@ mod tests {
         };
         assign_review(&gh, "o/r", &pr, &cfg).await.unwrap();
         assert!(finish().is_empty());
+    }
+
+    #[test]
+    fn go_directive_detects_toolchain_raise() {
+        let before = go_directive("module x\n\ngo 1.21\n\nrequire a v1\n").unwrap();
+        let after = go_directive("module x\n\ngo 1.26.0\n\ntoolchain go1.26.0\n").unwrap();
+        assert_eq!((before.as_str(), after.as_str()), ("1.21", "1.26.0"));
+        assert_eq!(cmp_versions(&after, &before), Ordering::Greater);
+        assert_eq!(go_directive("module x\n"), None);
     }
 }
