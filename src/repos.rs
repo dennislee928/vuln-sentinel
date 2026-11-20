@@ -36,7 +36,7 @@ pub async fn list(gh: &GitHub, f: &RepoFilter) -> Result<Vec<Repo>> {
 
 async fn list_with_mode(gh: &GitHub, f: &RepoFilter, mode: &str) -> Result<Vec<Repo>> {
     let (path, pick) = repository_endpoint(mode)?;
-    let raw = gh.paginate(path, pick, 100).await?;
+    let raw = gh.paginate_all(path, pick, 100).await?;
     let mut repos: Vec<Repo> = raw
         .iter()
         .filter_map(|r| {

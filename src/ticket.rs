@@ -132,7 +132,7 @@ fn issue_body(group: &str, items: &[&Tracked], cfg: &TicketCfg) -> String {
 
 /// Find existing vuln-sentinel issues in a repo, keyed by group marker.
 async fn existing_issues(gh: &GitHub, repo: &str) -> Result<HashMap<String, Value>> {
-    let items = gh.paginate(&format!("/repos/{repo}/issues?labels={LABEL}&state=all&per_page=100"), None, 20).await?;
+    let items = gh.paginate_all(&format!("/repos/{repo}/issues?labels={LABEL}&state=all&per_page=100"), None, 20).await?;
     let mut m = HashMap::new();
     for i in items {
         if i.get("pull_request").is_some() {

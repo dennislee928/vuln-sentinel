@@ -124,7 +124,30 @@ impl GitHub {
 
     /// GET all pages following `Link: rel="next"`. `pick` extracts the array
     /// from envelope responses (e.g. search results); default is the body itself.
+    /// Stops quietly after `max_pages`; use [`GitHub::paginate_all`] when a
+    /// partial list would be wrong.
     pub async fn paginate(&self, path: &str, pick: Option<&str>, max_pages: usize) -> Result<Vec<Value>> {
+        Ok(self.paginate_inner(path, pick, max_pages).await?.items)
+    }
+
+    /// Like [`GitHub::paginate`], but fails instead of returning a partial list:
+    /// when `max_pages` is reached while a next page exists, or when an envelope's
+    /// `total_count` disagrees with the number of items received.
+    pub async fn paginate_all(&self, path: &str, pick: Option<&str>, max_pages: usize) -> Result<Vec<Value>> {
+        let p = self.paginate_inner(path, pick, max_pages).await?;
+        if p.truncated {
+            bail!("{path}: more than {max_pages} pages; refusing to use a truncated list");
+        }
+        if let Some(total) = p.total_count {
+            if total != p.items.len() as u64 {
+                bail!("{path}: total_count is {total} but {} items were listed", p.items.len());
+            }
+        }
+        Ok(p.items)
+    }
+
+    async fn paginate_inner(&self, path: &str, pick: Option<&str>, max_pages: usize) -> Result<Pages> {
+        let mut total_count = None;
         let mut out = Vec::new();
         let mut next = Some(path.to_string());
         let mut pages = 0;
@@ -132,6 +155,9 @@ impl GitHub {
             let r = Self::check(self.send(Method::GET, &p, None, None).await?, &p).await?;
             next = r.headers().get(header::LINK).and_then(|v| v.to_str().ok()).and_then(parse_next_link);
             let v: Value = r.json().await?;
+            if pick.is_some() && total_count.is_none() {
+                total_count = v.get("total_count").and_then(Value::as_u64);
+            }
             let arr = match pick {
                 Some(k) => v.get(k).cloned().unwrap_or(Value::Null),
                 None => v,
@@ -145,7 +171,12 @@ impl GitHub {
                 break;
             }
         }
-        Ok(out)
+        Ok(Pages { truncated: next.is_some(), total_count, items: out })
+    }
+
+    /// The same client authenticated with a different token.
+    pub fn with_token(&self, token: String) -> GitHub {
+        GitHub { token, ..self.clone() }
     }
 
     pub async fn post(&self, path: &str, body: &Value) -> Result<Value> {
@@ -191,6 +222,14 @@ impl GitHub {
         }
         Ok(v["data"].clone())
     }
+}
+
+struct Pages {
+    items: Vec<Value>,
+    /// A next page existed when `max_pages` was reached.
+    truncated: bool,
+    /// `total_count` from the first envelope page, if any.
+    total_count: Option<u64>,
 }
 
 fn parse_next_link(link: &str) -> Option<String> {
@@ -282,6 +321,28 @@ pub(crate) mod tests {
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
             body.len()
         )
+    }
+
+    #[tokio::test]
+    async fn paginate_all_rejects_truncation_and_count_mismatch() {
+        let (gh, finish) = mock(vec![
+            json_response(r#"[{"n":1}]"#, "Link: <{base}/x?page=2>; rel=\"next\"\r\n"),
+            json_response(r#"{"total_count":2,"repositories":[{"n":1}]}"#, ""),
+            json_response(r#"{"total_count":1,"repositories":[{"n":1}]}"#, ""),
+        ]);
+        let e = gh.paginate_all("/x", None, 1).await.unwrap_err().to_string();
+        assert!(e.contains("more than 1 pages"), "{e}");
+        let e = gh.paginate_all("/y", Some("repositories"), 10).await.unwrap_err().to_string();
+        assert!(e.contains("total_count is 2 but 1 items"), "{e}");
+        assert_eq!(gh.paginate_all("/z", Some("repositories"), 10).await.unwrap().len(), 1);
+        assert_eq!(finish().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn paginate_keeps_quiet_truncation() {
+        let (gh, finish) = mock(vec![json_response(r#"[{"n":1}]"#, "Link: <{base}/x?page=2>; rel=\"next\"\r\n")]);
+        assert_eq!(gh.paginate("/x", None, 1).await.unwrap().len(), 1);
+        finish();
     }
 
     #[test]
