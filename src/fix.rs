@@ -441,6 +441,9 @@ async fn fix_repo(gh: &GitHub, state: &mut State, repo: &Repo, groups: Vec<Group
                 let msg = format!("fix(deps): bump {} to {} in {file} ({} {})", g.package, g.target, g.ecosystem, g.severity);
                 sh(&dir, "git", &["commit", "-q", "-m", &msg]).await?;
                 fixed.push((g.key.clone(), file.clone()));
+            } else if ok && existing.is_some() {
+                // Already fixed by an earlier commit on the open fix PR's branch: link it, don't report failure.
+                fixed.push((g.key.clone(), file.clone()));
             } else {
                 sh(&dir, "git", &["reset", "-q", "--hard"]).await?;
                 sh(&dir, "git", &["clean", "-qfd"]).await?;
