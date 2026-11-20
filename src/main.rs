@@ -279,6 +279,7 @@ impl App {
                 std::env::var("RUNNER_TEMP").map(|t| PathBuf::from(t).join("vuln-sentinel")).unwrap_or_else(|_| PathBuf::from(".vs-work"))
             }),
             branch: self.opts.fix_branch.clone(),
+            bot_authored_only: std::env::var("VS_AUTH_MODE").as_deref() == Ok("app"),
         }
     }
 

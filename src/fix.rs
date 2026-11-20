@@ -32,6 +32,10 @@ pub struct FixCfg {
     pub max_groups_per_repo: usize,
     pub workdir: PathBuf,
     pub branch: String,
+    /// App mode: only continue fix PRs authored by a Bot. A legacy PR on the fix
+    /// branch opened by a human/PAT is closed and replaced by a Bot-authored one,
+    /// so the human can review it and approval is never self-approval.
+    pub bot_authored_only: bool,
 }
 
 #[derive(Debug, Default)]
@@ -317,6 +321,7 @@ async fn assign_review(gh: &GitHub, repo: &str, pr: &Value, cfg: &FixCfg) -> Res
     let reviewers: Vec<&String> = cfg
         .reviewers
         .iter()
+        .filter(|login| pr["user"]["login"].as_str() != Some(login.as_str()))
         .filter(|login| !pr["requested_reviewers"].as_array().into_iter().flatten().any(|r| r["login"].as_str() == Some(login.as_str())))
         .collect();
     if !reviewers.is_empty() {
@@ -401,7 +406,15 @@ async fn fix_repo(gh: &GitHub, state: &mut State, repo: &Repo, groups: Vec<Group
     std::fs::create_dir_all(&cfg.workdir)?;
     let owner = name.split('/').next().unwrap_or_default();
     let open_prs: Vec<Value> = gh.get(&format!("/repos/{name}/pulls?head={owner}:{}&state=open", cfg.branch)).await?;
-    let existing = open_prs.into_iter().next();
+    let mut existing = open_prs.into_iter().next();
+    if cfg.bot_authored_only && existing.as_ref().is_some_and(|p| p["user"]["type"].as_str() != Some("Bot")) {
+        let legacy = existing.take().unwrap_or_default();
+        let n = legacy["number"].as_u64().context("fix PR has no number")?;
+        tracing::warn!("fix {name}: closing #{n} by {} on {}; replacing with a Bot-authored PR", legacy["user"]["login"], cfg.branch);
+        let note = "Superseded: vuln-sentinel now opens fix PRs as its GitHub App so a human can review and approve them. A Bot-authored PR replaces this one.";
+        gh.post(&format!("/repos/{name}/issues/{n}/comments"), &json!({"body": note})).await?;
+        gh.patch(&format!("/repos/{name}/pulls/{n}"), &json!({"state": "closed"})).await?;
+    }
     // Cancel server-side auto-merge before pushing updates to an existing PR.
     if !cfg.auto_merge {
         if let Some(pr) = &existing {
@@ -682,6 +695,7 @@ mod tests {
             max_groups_per_repo: 1,
             workdir: PathBuf::new(),
             branch: "fix".into(),
+            bot_authored_only: false,
         };
         let queued = r#"{"state":"open","merged":false,"node_id":"PR_1","auto_merge":{"enabled_by":{}}}"#;
         let (gh, finish) = mock(vec![json_response(queued, ""), json_response(r#"{"data":{}}"#, "")]);
@@ -782,5 +796,27 @@ mod tests {
         assert_eq!(ci_verdict(&[], &[], false), None);
         assert_eq!(ci_verdict(&[], &[], true), Some(true));
         assert_eq!(ci_verdict(&[], &[json!({"state":"pending"})], false), None);
+    }
+
+    #[tokio::test]
+    async fn never_requests_review_from_pr_author() {
+        let (gh, finish) = mock(vec![]);
+        let pr = serde_json::json!({"number": 6, "user": {"login": "alice", "type": "User"}, "requested_reviewers": []});
+        let cfg = FixCfg {
+            dry_run: false,
+            auto_merge: false,
+            merge_without_checks: false,
+            reviewers: vec!["alice".into()],
+            assignees: vec![],
+            packages: vec![],
+            max_repos: 1,
+            max_attempts: 1,
+            max_groups_per_repo: 1,
+            workdir: PathBuf::new(),
+            branch: "fix".into(),
+            bot_authored_only: true,
+        };
+        assign_review(&gh, "o/r", &pr, &cfg).await.unwrap();
+        assert!(finish().is_empty());
     }
 }
