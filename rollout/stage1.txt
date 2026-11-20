@@ -2,3 +2,7 @@
 # pokemon: npm lockfile at Pokemon/package-lock.json. Only CI is a Cloudflare Pages deploy;
 # SCAN-ONLY until it has a non-deploy CI check: do not run fix or apply-ruleset against it.
 dennislee928/pokemon
+dennislee928/Feeder-of-the-Future-Prize
+dennislee928/UAD_LANG
+dennislee928/firmware-research-demo
+dennislee928/QASM
