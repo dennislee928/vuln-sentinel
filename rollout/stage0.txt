@@ -1,0 +1,2 @@
+# Stage 0: isolated validation repository (G7 merge gate + G8 remediation loop)
+dennislee928/vuln-sentinel-e2e-lab

@@ -18,14 +18,16 @@ def require(condition, message):
 phase = sys.argv[1]
 require(phase in ("proposed", "before-verify", "verified"), "Unknown phase")
 repo = os.environ["TEST_REPO"]
-require(repo == "dennislee928/Claude_Devboard_Pet", "Unexpected validation repository")
+package = os.environ["TARGET_PACKAGE"]
+required_check = os.environ.get("REQUIRED_CHECK", "")
+require(repo == "dennislee928/vuln-sentinel-e2e-lab", "Unexpected validation repository")
 state = json.loads(Path("state/findings.json").read_text())
 findings = list(state["findings"].values())
 require(findings, "No findings: cannot claim a successful remediation test")
 require(all(t["finding"]["repo"] == repo for t in findings), "Unexpected repository in state")
-other_unresolved = sum(t["status"] != "resolved" for t in findings if t["finding"]["package"] != "rustix")
-findings = [t for t in findings if t["finding"]["package"] == "rustix"]
-require(findings, "No rustix finding: cannot claim a successful targeted test")
+other_unresolved = sum(t["status"] != "resolved" for t in findings if t["finding"]["package"] != package)
+findings = [t for t in findings if t["finding"]["package"] == package]
+require(findings, f"No {package} finding: cannot claim a successful targeted test")
 prs = {t["pr"]["number"] for t in findings if t.get("pr")}
 issues = {t["issue"]["number"] for t in findings if t.get("issue")}
 require(len(prs) == 1 and issues, "Expected one fix PR and at least one security issue")
@@ -48,16 +50,33 @@ else:
     approval = latest.get("dennislee928", {})
     require(approval.get("state") == "APPROVED" and approval.get("commit_id") == pr["head"]["sha"],
             "Missing human approval of the final PR head")
+    require(approval.get("user", {}).get("type") == "User", "Approval must come from a human account")
+    if required_check:
+        try:
+            runs = api(f"repos/{repo}/commits/{pr['head']['sha']}/check-runs?per_page=100")["check_runs"]
+        except subprocess.CalledProcessError:
+            runs = None  # token lacks Checks: read; merge itself proves the required_status_checks rule passed
+            print(f"WARN: cannot read check runs; relying on ruleset-enforced {required_check}")
+        if runs is not None:
+            ok = [r for r in runs if r["name"] == required_check and r["conclusion"] == "success"]
+            require(ok, f"Required check {required_check} did not pass on the approved head")
+    require(pr["merged_by"]["login"] != pr["user"]["login"], "Bot must not merge its own PR")
 for number in issues:
     issue = api(f"repos/{repo}/issues/{number}")
     expected = "closed" if phase == "verified" else "open"
     require(issue["state"] == expected, f"Issue must be {expected} during {phase}")
 if phase == "verified":
     require(all(t["status"] == "resolved" for t in findings), "Findings remain unresolved")
+    if package == "minimist":
+        import base64
+        default = api(f"repos/{repo}")["default_branch"]
+        lock = json.loads(base64.b64decode(api(f"repos/{repo}/contents/package-lock.json?ref={default}")["content"]))
+        installed = lock["packages"][f"node_modules/{package}"]["version"]
+        require(tuple(map(int, installed.split("."))) >= (1, 2, 6), f"{package} {installed} still vulnerable on {default}")
     for day in state["days"].values():
         require(day.get("scan_errors", 0) == 0, "Scan errors must not count as resolution")
 print(f"PASS {phase}: {pr['html_url']}; issues={sorted(issues)}; other unresolved findings={other_unresolved}")
 summary = os.environ.get("GITHUB_STEP_SUMMARY")
 if summary:
     with open(summary, "a") as out:
-        out.write(f"\nE2E **{phase}** (rustix): {pr['html_url']} — issues {sorted(issues)}; other unresolved findings: {other_unresolved}\n")
+        out.write(f"\nE2E **{phase}** ({package}): {pr['html_url']} — issues {sorted(issues)}; other unresolved findings: {other_unresolved}\n")

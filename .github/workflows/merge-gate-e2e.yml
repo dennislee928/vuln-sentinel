@@ -1,0 +1,50 @@
+name: Merge Gate E2E (G7)
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: owner/name; must be listed in rollout/stage*.txt
+        type: string
+        default: dennislee928/vuln-sentinel-e2e-lab
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vuln-sentinel-merge-gate-${{ inputs.repo }}
+  cancel-in-progress: false
+
+jobs:
+  merge-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate target against rollout allowlist
+        id: target
+        env:
+          REPO: ${{ inputs.repo }}
+        run: |
+          set -euo pipefail
+          [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          grep -hvE '^\s*(#|$)' rollout/stage*.txt | grep -qxF "$REPO"
+          echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${REPO##*/}" >> "$GITHUB_OUTPUT"
+      - name: Generate App token scoped to the target
+        id: bot
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.VULN_SENTINEL_APP_ID }}
+          private-key: ${{ secrets.VULN_SENTINEL_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.owner }}
+          repositories: ${{ steps.target.outputs.name }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Attempt every bypass as the Bot
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          REPO: ${{ inputs.repo }}
+        run: |
+          echo "## Merge gate: $REPO" >> "$GITHUB_STEP_SUMMARY"
+          scripts/check-merge-gate.sh

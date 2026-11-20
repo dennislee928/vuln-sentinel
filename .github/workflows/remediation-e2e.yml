@@ -26,7 +26,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      TEST_REPO: dennislee928/Claude_Devboard_Pet
+      TEST_REPO: dennislee928/vuln-sentinel-e2e-lab
+      TARGET_PACKAGE: minimist
+      REQUIRED_CHECK: dependency-test
       VS_AUTH_MODE: app
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +54,7 @@ jobs:
           app-id: ${{ vars.VULN_SENTINEL_APP_ID }}
           private-key: ${{ secrets.VULN_SENTINEL_APP_PRIVATE_KEY }}
           owner: dennislee928
-          repositories: Claude_Devboard_Pet
+          repositories: vuln-sentinel-e2e-lab
           permission-contents: write
           permission-pull-requests: write
           permission-issues: write
@@ -63,7 +65,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          args=(--repos "$TEST_REPO" --tracker-repo "$TEST_REPO" --auto-merge false --max-fix-repos 1 --fix-packages rustix --fix-branch vuln-sentinel/app-remediation-e2e --fix-reviewers dennislee928 --fix-assignees dennislee928)
+          args=(--repos "$TEST_REPO" --tracker-repo "$TEST_REPO" --auto-merge false --max-fix-repos 1 --fix-packages "$TARGET_PACKAGE" --fix-branch vuln-sentinel/app-remediation-e2e --fix-reviewers dennislee928 --fix-assignees dennislee928)
           target/release/vuln-sentinel scan "${args[@]}"
           target/release/vuln-sentinel ticket "${args[@]}"
           target/release/vuln-sentinel fix "${args[@]}"
@@ -77,7 +79,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/check-remediation-e2e.py before-verify
-          target/release/vuln-sentinel verify --repos "$TEST_REPO" --tracker-repo "$TEST_REPO" --auto-merge false --fix-branch vuln-sentinel/app-remediation-e2e
+          target/release/vuln-sentinel verify --repos "$TEST_REPO" --tracker-repo "$TEST_REPO" --auto-merge false --fix-packages "$TARGET_PACKAGE" --fix-branch vuln-sentinel/app-remediation-e2e
           python3 scripts/check-remediation-e2e.py verified
       - name: Assert Bot author, reviewer and disabled merge
         if: inputs.phase == 'remediate'
