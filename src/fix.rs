@@ -133,6 +133,24 @@ fn edit_package_json(path: &Path, name: &str, target: &str, override_key: &[&str
 }
 
 /// The `go` directive (minimum Go version) of a go.mod file.
+#[derive(Debug, PartialEq, Eq)]
+enum Outcome {
+    Commit,
+    AlreadyFixed,
+    Revert,
+}
+
+/// What to do with the working tree after one fixer run. A fixer error always reverts,
+/// even when files changed and the vulnerable version is gone: guards such as the Go
+/// `go`-directive check run after the tool has already rewritten the files.
+fn outcome(applied: bool, vuln_gone: bool, changed: bool, continuing_pr: bool) -> Outcome {
+    match (applied, vuln_gone, changed, continuing_pr) {
+        (true, true, true, _) => Outcome::Commit,
+        (true, true, false, true) => Outcome::AlreadyFixed,
+        _ => Outcome::Revert,
+    }
+}
+
 fn go_directive(gomod: &str) -> Option<String> {
     gomod.lines().find_map(|l| l.trim().strip_prefix("go ").map(|v| v.trim().to_string()))
 }
@@ -448,12 +466,13 @@ async fn fix_repo(gh: &GitHub, state: &mut State, repo: &Repo, groups: Vec<Group
             let res = apply(&dir, file, g, old).await;
             let ok = !still_vulnerable(&dir, file, g, old);
             let changed = !sh(&dir, "git", &["status", "--porcelain"]).await?.trim().is_empty();
-            if ok && changed {
+            let action = outcome(res.is_ok(), ok, changed, existing.is_some());
+            if action == Outcome::Commit {
                 sh(&dir, "git", &["add", "-A"]).await?;
                 let msg = format!("fix(deps): bump {} to {} in {file} ({} {})", g.package, g.target, g.ecosystem, g.severity);
                 sh(&dir, "git", &["commit", "-q", "-m", &msg]).await?;
                 fixed.push((g.key.clone(), file.clone()));
-            } else if ok && existing.is_some() {
+            } else if action == Outcome::AlreadyFixed {
                 // Already fixed by an earlier commit on the open fix PR's branch: link it, don't report failure.
                 fixed.push((g.key.clone(), file.clone()));
             } else {
@@ -833,6 +852,19 @@ mod tests {
         };
         assign_review(&gh, "o/r", &pr, &cfg).await.unwrap();
         assert!(finish().is_empty());
+    }
+
+    #[test]
+    fn a_fixer_error_is_never_committed() {
+        // The Go guard bails *after* `go get` rewrote go.mod: the vulnerable version is gone
+        // and files changed, but the error must still win.
+        assert_eq!(outcome(false, true, true, false), Outcome::Revert);
+        assert_eq!(outcome(false, true, true, true), Outcome::Revert);
+        assert_eq!(outcome(false, true, false, true), Outcome::Revert);
+        assert_eq!(outcome(true, true, true, false), Outcome::Commit);
+        assert_eq!(outcome(true, true, false, true), Outcome::AlreadyFixed);
+        assert_eq!(outcome(true, true, false, false), Outcome::Revert);
+        assert_eq!(outcome(true, false, true, true), Outcome::Revert);
     }
 
     #[test]
