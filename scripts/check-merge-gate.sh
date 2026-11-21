@@ -2,7 +2,7 @@
 # G7: prove the fix-bot App token cannot bypass review / CI on the default branch.
 # Positive control: the token CAN create a branch and PR (so rejections are rule-driven,
 # not a weak token). Every bypass attempt must then be rejected and main must not move.
-# Env: GH_TOKEN (App installation token), REPO (owner/name), RULESET_NAME, BOT_LOGIN.
+# Env: GH_TOKEN (App installation token), REPO (owner/name), RULESET_NAME, BOT_LOGIN, STATIC_ONLY.
 set -euo pipefail
 : "${GH_TOKEN:?}" "${REPO:?}" "${RULESET_NAME:=Human approval and CI required}" "${BOT_LOGIN:=vuln-sentinel-fix-bot[bot]}"
 fail=0
@@ -38,6 +38,9 @@ jq -e 'any(.[]; .type == "required_status_checks" and (.parameters.required_stat
   && pass "required_status_checks: $(jq -c '[.[]|select(.type=="required_status_checks").parameters.required_status_checks[].context]' /tmp/rules.json)" || bad "no required status checks"
 jq -e 'any(.[]; .type == "non_fast_forward") and any(.[]; .type == "deletion")' /tmp/rules.json >/dev/null \
   && pass "force-push and deletion blocked by rules" || bad "non_fast_forward/deletion rule missing"
+
+# STATIC_ONLY=1: stop after the read-only ruleset checks (daily preflight; opens no probe PR).
+if [[ "${STATIC_ONLY:-0}" == 1 ]]; then exit $fail; fi
 
 # 2. Positive control: bot opens a throwaway PR.
 BRANCH="vuln-sentinel/merge-gate-${GITHUB_RUN_ID:-local}-$$"

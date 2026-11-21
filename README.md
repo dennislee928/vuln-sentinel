@@ -38,6 +38,8 @@ For a GitHub App installation token, set `auth-mode: app` in the action's `with`
 
 For remediation, grant the installation **Contents: write**, **Pull requests: write**, and **Issues: write** on the target repositories. Installation access alone does not imply write access: `permissions.admin` is not used to authorize fixes. In PAT mode, an explicit `permissions.push: false` skips remediation. In App mode that field is ignored, because installation listings report user-style permissions that are always false for a Bot; GitHub enforces the installation token's permissions during branch pushes and PR creation. A scan-only installation needs Contents read access. The bot does not change repository settings to enable auto-merge or bypass branch protections.
 
+**Write identity.** `ticket`, `fix`, `verify`, `archive` and `run` refuse to write to GitHub unless the token is an App installation token. The check is whether the token can list `/installation/repositories`, which user tokens can't. So every issue, branch, PR and review comes from `vuln-sentinel-fix-bot[bot]`, never from a personal account. A PAT can still scan, or run any command with `--dry-run`. `--allow-user-writes` (`allow-user-writes: "true"`) opts out for PAT-only setups; the daily bot never sets it.
+
 An installation token covers one account, and only the repositories selected for that installation. Repository and issue listings fail rather than return a partial list when pagination is cut short or `total_count` disagrees.
 
 ### Coverage

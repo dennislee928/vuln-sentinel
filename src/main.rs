@@ -4,6 +4,7 @@ mod coverage;
 mod feeds;
 mod fix;
 mod github;
+mod identity;
 mod model;
 mod report;
 mod repos;
@@ -50,6 +51,13 @@ enum Cmd {
     Coverage,
 }
 
+impl Cmd {
+    /// Commands that create or change issues, branches, PRs, reviews or merges.
+    fn writes_to_github(self) -> bool {
+        matches!(self, Cmd::Ticket | Cmd::Fix | Cmd::Verify | Cmd::Archive | Cmd::Run)
+    }
+}
+
 #[derive(clap::Args, Clone)]
 pub struct Opts {
     /// GitHub token with repo, workflow and read:org scopes (falls back to GITHUB_TOKEN).
@@ -86,6 +94,10 @@ pub struct Opts {
     /// Do not create issues, branches or PRs.
     #[arg(long, global = true)]
     dry_run: bool,
+    /// Allow GitHub writes with a user token (PAT). Off by default: writes must be
+    /// made as the vuln-sentinel-fix-bot[bot] App installation. Never set this for the daily bot.
+    #[arg(long, env = "VS_ALLOW_USER_WRITES", global = true)]
+    allow_user_writes: bool,
     #[arg(long, default_value_t = 8, global = true)]
     concurrency: usize,
     /// Ops repository (`owner/name`) for tracker issues and report links.
@@ -354,7 +366,6 @@ impl App {
         Ok(())
     }
 
-    /// Full pipeline, waiting a bounded time for fix PRs to merge.
     async fn coverage(&mut self) -> Result<()> {
         if std::env::var("VS_AUTH_MODE").as_deref() == Ok("app") {
             anyhow::bail!("coverage compares the App against what a PAT sees; pass a PAT in --token and unset VS_AUTH_MODE=app");
@@ -384,6 +395,7 @@ impl App {
         Ok(())
     }
 
+    /// Full pipeline, waiting a bounded time for fix PRs to merge.
     async fn run(&mut self) -> Result<()> {
         self.collect().await?;
         self.scan(None).await?;
@@ -446,6 +458,9 @@ async fn main() -> Result<()> {
     let state = State::load(&cli.opts.state_file)?;
     let mut app = App { gh: GitHub::new(http.clone(), token), http, date, now, state, opts: cli.opts, repos: None };
 
+    if cli.cmd.writes_to_github() && !app.opts.dry_run {
+        identity::require_bot_writer(&app.gh, app.opts.allow_user_writes).await?;
+    }
     match cli.cmd {
         Cmd::Collect => app.collect().await?,
         Cmd::Scan => app.scan(None).await?,
@@ -462,6 +477,19 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+
+    #[test]
+    fn user_writes_are_off_by_default_and_write_commands_are_guarded() {
+        for mode in ["run", "fix", "verify", "ticket", "archive"] {
+            let cli = Cli::try_parse_from(["vuln-sentinel", mode]).unwrap();
+            assert!(!cli.opts.allow_user_writes);
+            assert!(cli.cmd.writes_to_github(), "{mode}");
+        }
+        for mode in ["collect", "scan", "coverage"] {
+            assert!(!Cli::try_parse_from(["vuln-sentinel", mode]).unwrap().cmd.writes_to_github(), "{mode}");
+        }
+        assert!(Cli::try_parse_from(["vuln-sentinel", "fix", "--allow-user-writes"]).unwrap().opts.allow_user_writes);
+    }
 
     #[test]
     fn auto_merge_requires_explicit_opt_in() {

@@ -1,11 +1,27 @@
-
 name: Vuln Sentinel Fix Bot
 
+# Daily gated remediation of ONE allowlisted repository, as vuln-sentinel-fix-bot[bot].
+# Every write uses an App installation token scoped to that repository; no PAT is used.
+# Fix PRs never auto-merge: the target's ruleset requires a human approval and green CI,
+# and the run refuses to open PRs if that ruleset is missing or weak.
+
 on:
+  schedule:
+    - cron: '30 1 * * *'
   workflow_dispatch:
+    inputs:
+      repo:
+        description: owner/name; must be listed (not scan-only) in rollout/stage*.txt
+        type: string
+        default: dennislee928/QASM
+      dry-run:
+        description: Scan and plan fixes without writing to GitHub
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: vuln-sentinel-remediation
@@ -14,32 +30,102 @@ concurrency:
 jobs:
   remediation:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 60
+    env:
+      VS_AUTH_MODE: app
+      TARGET: ${{ inputs.repo || 'dennislee928/QASM' }}
+      DRY_RUN: ${{ inputs.dry-run && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Generate bot installation token
+      - name: Validate target against the rollout allowlist
+        id: target
+        run: |
+          set -euo pipefail
+          [[ "$TARGET" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::bad target $TARGET"; exit 1; }
+          # Owners the App may be installed on: the personal account and its organizations.
+          # An installation token covers one account, so the token below is minted for the target's owner.
+          case "${TARGET%%/*}" in
+            dennislee928|BabyGrootCICD|Twister5-com-tw-Dev-dep|National-Cheng-Chi-University-DCT-Dep|Jest-Test-Team|cyber-security-dev-dep-mitake-com-tw|quantumworld-dpdns-io) ;;
+            *) echo "::error::owner ${TARGET%%/*} is not an allowed owner"; exit 1 ;;
+          esac
+          line=$(grep -hvE '^\s*(#|$)' rollout/stage*.txt | awk -v r="$TARGET" '$1 == r' | head -1)
+          [[ -n "$line" ]] || { echo "::error::$TARGET is not in rollout/stage*.txt"; exit 1; }
+          [[ "$(awk '{print $2}' <<<"$line")" != "scan-only" ]] || { echo "::error::$TARGET is scan-only"; exit 1; }
+          echo "name=${TARGET##*/}" >> "$GITHUB_OUTPUT"
+          echo "owner=${TARGET%%/*}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: actions/setup-go@v5
+        with: { go-version: stable, cache: false }
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: Restore state from the last successful fix run
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          for id in $(gh run list -R "$GITHUB_REPOSITORY" -w fix-bot.yml -s success -L 20 --json databaseId -q '.[].databaseId'); do
+            if gh run download "$id" -R "$GITHUB_REPOSITORY" -n "fix-bot-state-${{ steps.target.outputs.owner }}-${{ steps.target.outputs.name }}" -D state 2>/dev/null; then
+              echo "restored state from run $id"; exit 0
+            fi
+          done
+          echo "no previous state; starting fresh"
+      - name: Generate App token scoped to the target
         id: bot
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ vars.VULN_SENTINEL_APP_ID }}
           private-key: ${{ secrets.VULN_SENTINEL_APP_PRIVATE_KEY }}
-          owner: dennislee928
-
-      - name: Verify installation
+          owner: ${{ steps.target.outputs.owner }}
+          repositories: ${{ steps.target.outputs.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - name: Preflight - merge gate ruleset holds for the Bot (read-only)
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          REPO: ${{ env.TARGET }}
+          STATIC_ONLY: '1'
+        run: scripts/check-merge-gate.sh
+      - name: Verify, scan, ticket, fix
+        env:
+          VS_TOKEN: ${{ steps.bot.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No tracker issue: this ops repo is public. Issues go to the target only.
+          vs() {
+            env -u GITHUB_REPOSITORY target/release/vuln-sentinel "$@" --repos "$TARGET" \
+              --auto-merge false --fix-reviewers dennislee928 --fix-assignees dennislee928 \
+              --max-fix-repos 1 --max-fix-groups 10 --max-fix-attempts 3 --max-new-issues 20
+          }
+          if [[ "$DRY_RUN" == "true" ]]; then
+            vs scan --dry-run
+            vs fix --dry-run
+            exit 0
+          fi
+          vs verify
+          vs scan
+          vs ticket
+          vs fix
+          vs ticket
+      - name: Assert fix PRs are Bot-authored, gated, not auto-merged
+        if: env.DRY_RUN != 'true'
         env:
           GH_TOKEN: ${{ steps.bot.outputs.token }}
         run: |
-          gh api /installation/repositories \
-            --jq '.total_count'
-
-      - name: Vuln Sentinel dry run
-        uses: ./
+          set -euo pipefail
+          if [[ -f state/findings.json ]]; then python3 scripts/check-rollout.py fix; else echo "no state written"; fi
+      - uses: actions/upload-artifact@v4
+        if: always() && env.DRY_RUN != 'true'
         with:
-          token: ${{ steps.bot.outputs.token }}
-          auth-mode: app
-          mode: scan
-          dry-run: "true"
-          auto-merge: "false"
-          merge-without-checks: "false"
-          commit-results: "false"
+          name: fix-bot-state-${{ steps.target.outputs.owner }}-${{ steps.target.outputs.name }}
+          path: state/findings.json
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fix-bot-reports
+          path: reports/
+          if-no-files-found: ignore
