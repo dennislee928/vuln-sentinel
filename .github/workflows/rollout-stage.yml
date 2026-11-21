@@ -96,7 +96,7 @@ jobs:
         run: |
           set -euo pipefail
           # No tracker issue: this ops repo is public. Per-repo issues still go to each target.
-          vs() { env -u GITHUB_REPOSITORY target/release/vuln-sentinel "$@" --auto-merge false --fix-reviewers dennislee928 --fix-assignees dennislee928; }
+          vs() { env -u GITHUB_REPOSITORY target/release/vuln-sentinel "$@" --auto-merge false --fix-reviewers dennislee928 --fix-assignees dennislee928 --max-new-issues 20 --max-fix-groups 10 --max-fix-attempts 3; }
           case "$PHASE" in
             scan)   vs scan --repos "$ALL" --dry-run
                     vs fix --repos "$FIX" --dry-run --max-fix-repos "$COUNT" ;;
