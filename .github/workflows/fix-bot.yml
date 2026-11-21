@@ -41,11 +41,18 @@ jobs:
         id: target
         run: |
           set -euo pipefail
-          [[ "$TARGET" =~ ^dennislee928/[A-Za-z0-9_.-]+$ ]] || { echo "::error::bad target $TARGET"; exit 1; }
+          [[ "$TARGET" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::bad target $TARGET"; exit 1; }
+          # Owners the App may be installed on: the personal account and its organizations.
+          # An installation token covers one account, so the token below is minted for the target's owner.
+          case "${TARGET%%/*}" in
+            dennislee928|BabyGrootCICD|Twister5-com-tw-Dev-dep|National-Cheng-Chi-University-DCT-Dep|Jest-Test-Team|cyber-security-dev-dep-mitake-com-tw|quantumworld-dpdns-io) ;;
+            *) echo "::error::owner ${TARGET%%/*} is not an allowed owner"; exit 1 ;;
+          esac
           line=$(grep -hvE '^\s*(#|$)' rollout/stage*.txt | awk -v r="$TARGET" '$1 == r' | head -1)
           [[ -n "$line" ]] || { echo "::error::$TARGET is not in rollout/stage*.txt"; exit 1; }
           [[ "$(awk '{print $2}' <<<"$line")" != "scan-only" ]] || { echo "::error::$TARGET is scan-only"; exit 1; }
           echo "name=${TARGET##*/}" >> "$GITHUB_OUTPUT"
+          echo "owner=${TARGET%%/*}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
       - uses: actions/setup-go@v5
@@ -59,7 +66,7 @@ jobs:
         run: |
           set -uo pipefail
           for id in $(gh run list -R "$GITHUB_REPOSITORY" -w fix-bot.yml -s success -L 20 --json databaseId -q '.[].databaseId'); do
-            if gh run download "$id" -R "$GITHUB_REPOSITORY" -n "fix-bot-state-${{ steps.target.outputs.name }}" -D state 2>/dev/null; then
+            if gh run download "$id" -R "$GITHUB_REPOSITORY" -n "fix-bot-state-${{ steps.target.outputs.owner }}-${{ steps.target.outputs.name }}" -D state 2>/dev/null; then
               echo "restored state from run $id"; exit 0
             fi
           done
@@ -70,7 +77,7 @@ jobs:
         with:
           app-id: ${{ vars.VULN_SENTINEL_APP_ID }}
           private-key: ${{ secrets.VULN_SENTINEL_APP_PRIVATE_KEY }}
-          owner: dennislee928
+          owner: ${{ steps.target.outputs.owner }}
           repositories: ${{ steps.target.outputs.name }}
           permission-contents: write
           permission-pull-requests: write
@@ -113,7 +120,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always() && env.DRY_RUN != 'true'
         with:
-          name: fix-bot-state-${{ steps.target.outputs.name }}
+          name: fix-bot-state-${{ steps.target.outputs.owner }}-${{ steps.target.outputs.name }}
           path: state/findings.json
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
