@@ -1,0 +1,9 @@
+# Stage 2: first organization repositories (App installed org-wide, "Human approval and CI required" applied 2026-11-21).
+# Picked: the five most recently active org repos with lockfiles and green CI on the default branch.
+# Run rollout-stage.yml once per owner (input `owner`); an App token covers a single account.
+# Required checks are limited to jobs that run on every pull request (no path filters, no deploy/publish jobs).
+Jest-Test-Team/HOMELAB
+Jest-Test-Team/Dastacenter_Builder_Simulator
+Jest-Test-Team/Snow-talk
+Jest-Test-Team/ide-extension
+BabyGrootCICD/modern_hospital_information_system

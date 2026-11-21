@@ -13,6 +13,10 @@ on:
         type: choice
         options: [scan, fix, verify]
         default: scan
+      owner:
+        description: Account whose stage targets to run (one App installation token per owner)
+        type: string
+        default: dennislee928
       state-run-id:
         description: Run ID of the fix phase whose state to verify (verify only)
         type: string
@@ -44,12 +48,19 @@ jobs:
         id: targets
         env:
           STAGE: ${{ inputs.stage }}
+          OWNER: ${{ inputs.owner }}
         run: |
           set -euo pipefail
+          case "$OWNER" in
+            dennislee928|BabyGrootCICD|Twister5-com-tw-Dev-dep|National-Cheng-Chi-University-DCT-Dep|Jest-Test-Team|cyber-security-dev-dep-mitake-com-tw|quantumworld-dpdns-io) ;;
+            *) echo "::error::owner $OWNER is not allowlisted"; exit 1 ;;
+          esac
           f="rollout/stage${STAGE}.txt"
-          all=$(grep -vE '^\s*(#|$)' "$f" | awk '{print $1}')
-          fix=$(grep -vE '^\s*(#|$)' "$f" | awk '$2 != "scan-only" {print $1}')
-          for r in $all; do [[ "$r" =~ ^dennislee928/[A-Za-z0-9_.-]+$ ]] || { echo "bad target $r"; exit 1; }; done
+          mine() { grep -vE '^\s*(#|$)' "$f" | awk -v o="$OWNER/" 'index($1, o) == 1'; }
+          all=$(mine | awk '{print $1}')
+          fix=$(mine | awk '$2 != "scan-only" {print $1}')
+          [[ -n "$all" ]] || { echo "::error::no $OWNER targets in $f"; exit 1; }
+          for r in $all; do [[ "$r" =~ ^${OWNER}/[A-Za-z0-9_.-]+$ ]] || { echo "bad target $r"; exit 1; }; done
           echo "all=$(paste -sd, <<<"$all")" >> "$GITHUB_OUTPUT"
           echo "fix=$(paste -sd, <<<"$fix")" >> "$GITHUB_OUTPUT"
           echo "names=$(sed 's|.*/||' <<<"$all" | paste -sd, -)" >> "$GITHUB_OUTPUT"
@@ -69,7 +80,7 @@ jobs:
         with:
           app-id: ${{ vars.VULN_SENTINEL_APP_ID }}
           private-key: ${{ secrets.VULN_SENTINEL_APP_PRIVATE_KEY }}
-          owner: dennislee928
+          owner: ${{ inputs.owner }}
           repositories: ${{ steps.targets.outputs.names }}
           permission-contents: write
           permission-pull-requests: write
