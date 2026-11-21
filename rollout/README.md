@@ -12,6 +12,7 @@ Each `stageN.txt` lists `owner/name` targets, one per line. `merge-gate-e2e.yml`
 
 Per stage:
 1. `scripts/apply-ruleset.sh owner/name`: run with an admin token. It mirrors the lab ruleset with the repo's real CI checks.
+1b. `scripts/apply-bot-branch-ruleset.sh owner/name`: only `vuln-sentinel-fix-bot[bot]` may create or update `vuln-sentinel/*` branches. GitHub rejects pushes from personal tokens, including other schedulers and chat agents, which never run vuln-sentinel's own identity check. On 2026-11-21 at 13:03 UTC, a personal account pushed to all three stage-2 fix branches; this rule blocks that.
 2. Add the repo to the GitHub App installation (Settings → GitHub Apps → vuln-sentinel-fix-bot → Repository access).
 3. `gh workflow run merge-gate-e2e.yml -f repo=owner/name`: every Bot bypass attempt must be rejected.
 4. Scan in a dry run, then fix with `auto-merge: "false"` and `merge-without-checks: "false"`.
