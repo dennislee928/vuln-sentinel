@@ -48,6 +48,9 @@ inputs:
   fix-packages:
     description: Comma-separated package names to fix (empty means all; scanning still reports all findings)
     default: ""
+  allow-user-writes:
+    description: Allow writes with a user token (PAT). Off by default; writes must come from the vuln-sentinel-fix-bot[bot] App installation token
+    default: "false"
   dry-run:
     description: Report only; do not create issues, branches or PRs
     default: "false"
@@ -199,6 +202,7 @@ runs:
         [ "${{ inputs.include-archived }}" = "true" ] && args+=(--include-archived)
         [ "${{ inputs.merge-without-checks }}" = "true" ] && args+=(--merge-without-checks)
         [ "${{ inputs.dry-run }}" = "true" ] && args+=(--dry-run)
+        [ "${{ inputs.allow-user-writes }}" = "true" ] && args+=(--allow-user-writes)
         vuln-sentinel "${args[@]}"
         report="${{ inputs.report-dir }}/$(date -u +%F).md"
         if [ -f "$report" ]; then
